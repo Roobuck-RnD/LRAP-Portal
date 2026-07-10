@@ -1,0 +1,42 @@
+{
+  "unauthenticated": {
+    "description": "Access controls for unauthenticated requests",
+    "read": {
+      "ubus": {
+        "session": ["access", "login"],
+        "network.interface": ["dump", "status"],
+        "network.interface.lan": ["status"],
+        "network.device": ["status"],
+        "system": ["board", "info"],
+        "file": ["read", "exec"],
+        "uci": ["get", "changes"]
+      },
+      "file": {
+        "/tmp/dhcp.leases": ["read"],
+        "/proc/net/arp": ["read"],
+        "/proc/net/route": ["read"],
+        "/etc/wireless/mediatek/mt7981.dbdc.b0.dat": ["read"],
+        "/etc/wireless/mediatek/mt7981.dbdc.b1.dat": ["read"],
+        "/bin/sed": ["exec"],
+        "/sbin/ifconfig": ["exec"],
+        "/bin/sh": ["exec"],
+        "/sbin/reboot": ["exec"]
+      },
+      "uci": {
+        "dhcp": ["read"],
+        "system": ["read"]
+      }
+    },
+    "write": {
+      "ubus": {
+        "session": ["login"],
+        "uci": ["add", "set", "delete", "commit", "revert", "apply"],
+        "service": ["reload", "restart"]
+      },
+      "uci": {
+        "dhcp": ["write"],
+        "system": ["write"]
+      }
+    }
+  }
+}

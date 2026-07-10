@@ -1,0 +1,4 @@
+config server 'server'
+    	option listen        ':9080'                
+    	option ubus_url      'http://127.0.0.1/ubus' 
+    	option cors_origin   '*'                     

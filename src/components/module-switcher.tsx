@@ -66,7 +66,13 @@ export function ModuleSwitcher({ modules }: { modules: Module[] }) {
                 </div>
                 {module.name}
                 <DropdownMenuShortcut>
+                  {module.port}
+                </DropdownMenuShortcut>
+                <DropdownMenuShortcut>
                   {module.ipaddress}
+                </DropdownMenuShortcut>
+                <DropdownMenuShortcut>
+                  {module.mac}
                 </DropdownMenuShortcut>
                 <EthernetPort />
               </DropdownMenuItem>
