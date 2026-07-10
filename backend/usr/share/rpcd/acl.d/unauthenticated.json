@@ -1,0 +1,17 @@
+{
+  "unauthenticated": {
+    "description": "Access controls for unauthenticated requests",
+    "read": {
+          "ubus": {
+        "session": ["access", "login"],
+        "network.interface": ["dump"],
+        "network.interface.lan": ["status"],
+        "network.device": ["status"],
+        "system": ["board", "info"]
+        }
+        },
+    "write": {
+      "ubus": { "session": ["login"] }
+    }
+  }
+}

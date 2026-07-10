@@ -1,0 +1,10 @@
+{
+  "lrap-file": {
+    "description": "Allow reading leases via file.read",
+    "read": {
+      "file": {
+        "/tmp/dhcp.leases": [ "read" ]
+      }
+    }
+  }
+}

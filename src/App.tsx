@@ -1,13 +1,3 @@
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator
-} from '@/components/ui/breadcrumb'
-import { Separator } from '@/components/ui/separator'
-import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
-import { AppSidebar } from './components/app-sidebar'
 import { HashRouter, Routes, Route } from 'react-router'
 import Administration from './Pages/Systempages/administration'
 import FlashFirmware from './Pages/Systempages/flashfirmware'
@@ -18,6 +8,7 @@ import ScheduledTasks from './Pages/Systempages/scheduledtasks'
 import Software from './Pages/Systempages/software'
 import Startup from './Pages/Systempages/startup'
 import System from './Pages/Systempages/system'
+import ConnectedClients from './Pages/Statuspages/connectedclients'
 import FirewallStatus from './Pages/Statuspages/firewall'
 import KernelLog from './Pages/Statuspages/kernellog'
 import Overview from './Pages/Statuspages/overview'
@@ -35,66 +26,54 @@ import IPSecurity from './Pages/Networkpages/ipsecurity'
 import StaticRoutes from './Pages/Networkpages/staticroutes'
 import EasyMesh from './Pages/MTKpages/easymesh'
 import WiFiConfiguration from './Pages/MTKpages/wificonfiguration'
-import useCurrentTabStore from './states/tabState'
-import useCurrentTabGroupStore from './states/tabgroupState'
+import ProtectedRoute from './Pages/Loginpages/ProtectedRoute'
+import Login from './Pages/Loginpages/Login'
+import Layout from './components/Layout'
+import { Toaster } from './components/ui/sonner'
 
 function App() {
-  const { currentTab } = useCurrentTabStore()
-  const { currentTabGroup } = useCurrentTabGroupStore()
   return (
     <HashRouter>
-      <SidebarProvider>
-        <AppSidebar />
-        <SidebarInset>
-          <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-[[data-collapsible=icon]]/sidebar-wrapper:h-12">
-            <div className="flex items-center gap-2 px-4">
-              <SidebarTrigger className="-ml-1" />
-              <Separator orientation="vertical" className="mr-2 h-4" />
-              <Breadcrumb>
-                <BreadcrumbList>
-                  <BreadcrumbItem className="hidden md:block">
-                    <BreadcrumbPage>{currentTabGroup}</BreadcrumbPage>
-                  </BreadcrumbItem>
-                  <BreadcrumbSeparator className="hidden md:block" />
-                  <BreadcrumbItem>
-                    <BreadcrumbPage>{currentTab}</BreadcrumbPage>
-                  </BreadcrumbItem>
-                </BreadcrumbList>
-              </Breadcrumb>
-            </div>
-          </header>
-          <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
-              <Routes>
-                <Route path="/" element={<Overview />} />
-                <Route path="firewallstatus" element={<FirewallStatus />} />
-                <Route path="routesstatus" element={<RoutesStatus />} />
-                <Route path="systemlog" element={<SystemLog />} />
-                <Route path="kernellog" element={<KernelLog />} />
-                <Route path="processes" element={<Processes />} />
-                <Route path="realtimegraphs" element={<RealtimeGraphs />} />
-                <Route path="system" element={<System />} />
-                <Route path="administration" element={<Administration />} />
-                <Route path="software" element={<Software />} />
-                <Route path="startup" element={<Startup />} />
-                <Route path="scheduledtasks" element={<ScheduledTasks />} />
-                <Route path="mountpoints" element={<MountPoints />} />
-                <Route path="ledconfiguration" element={<LEDConfiguration />} />
-                <Route path="flashfirmware" element={<FlashFirmware />} />
-                <Route path="reboot" element={<Reboot />} />
-                <Route path="networkshares" element={<NetworkShares />} />
-                <Route path="interfaces" element={<Interfaces />} />
-                <Route path="DHCPandDNS" element={<DHCPandDNS />} />
-                <Route path="hostnames" element={<Hostnames />} />
-                <Route path="staticroutes" element={<StaticRoutes />} />
-                <Route path="firewall" element={<Firewall />} />
-                <Route path="diagnostics" element={<Diagnostics />} />
-                <Route path="ipsecurity" element={<IPSecurity />} />
-                <Route path="wificonfiguration" element={<WiFiConfiguration />} />
-                <Route path="easymesh" element={<EasyMesh />} />
-              </Routes>
-          </div>
-        </SidebarInset>
-      </SidebarProvider>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route
+          path="/"
+          element={
+            <ProtectedRoute>
+              <Layout />
+            </ProtectedRoute>
+          }
+        >
+          <Route path="/" element={<Overview />} />
+          <Route path="firewallstatus" element={<FirewallStatus />} />
+          <Route path="routesstatus" element={<RoutesStatus />} />
+          <Route path="connectedClients" element={<ConnectedClients />} />
+          <Route path="systemlog" element={<SystemLog />} />
+          <Route path="kernellog" element={<KernelLog />} />
+          <Route path="processes" element={<Processes />} />
+          <Route path="realtimegraphs" element={<RealtimeGraphs />} />
+          <Route path="system" element={<System />} />
+          <Route path="administration" element={<Administration />} />
+          <Route path="software" element={<Software />} />
+          <Route path="startup" element={<Startup />} />
+          <Route path="scheduledtasks" element={<ScheduledTasks />} />
+          <Route path="mountpoints" element={<MountPoints />} />
+          <Route path="ledconfiguration" element={<LEDConfiguration />} />
+          <Route path="flashfirmware" element={<FlashFirmware />} />
+          <Route path="reboot" element={<Reboot />} />
+          <Route path="networkshares" element={<NetworkShares />} />
+          <Route path="interfaces" element={<Interfaces />} />
+          <Route path="DHCPandDNS" element={<DHCPandDNS />} />
+          <Route path="hostnames" element={<Hostnames />} />
+          <Route path="staticroutes" element={<StaticRoutes />} />
+          <Route path="firewall" element={<Firewall />} />
+          <Route path="diagnostics" element={<Diagnostics />} />
+          <Route path="ipsecurity" element={<IPSecurity />} />
+          <Route path="wificonfiguration" element={<WiFiConfiguration />} />
+          <Route path="easymesh" element={<EasyMesh />} />
+        </Route>
+      </Routes>
+      <Toaster position="top-right" richColors />
     </HashRouter>
   )
 }

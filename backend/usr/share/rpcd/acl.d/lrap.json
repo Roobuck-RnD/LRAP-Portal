@@ -1,0 +1,23 @@
+{
+  "lrap": {
+    "description": "Permissions for lrapServer",
+    "read": {
+      "ubus": {
+        "system": [ "board", "info", "uptime" ],
+        "file":   [ "read", "stat" ],
+        "uci":    [ "get", "changes" ],
+        "network.interface": [ "status", "dump" ],
+	"network.interface.lan":  ["status"], 
+        "network.device":    [ "status" ],
+        "service": [ "list", "status" ],
+        "iwinfo":  [ "assoclist", "info" ]
+      }
+    },
+    "write": {
+      "ubus": {
+        "uci":     [ "set", "add", "delete", "commit" ],
+        "service": [ "restart", "reload" ]
+      }
+    }
+  }
+}
