@@ -1,6 +1,7 @@
 import type { JSX } from 'react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
+import { toast } from 'sonner'
 import { apiFetch } from '@/utils/http'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -42,15 +43,13 @@ export default function Administration(): JSX.Element {
 
     // 2. 获取当前用户名
     const username = sessionStorage.getItem('username') || 'root'
-    const token = sessionStorage.getItem('token') || ''
 
     try {
       // 3. 发送请求
       const res = await apiFetch('/api/system/password', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           username: username,
@@ -65,7 +64,7 @@ export default function Administration(): JSX.Element {
       }
 
       // 4. 修改成功
-      alert('Password changed successfully! Please log in again.')
+      toast.success('Password changed successfully! Please log in again.')
       
       // 清除 Session 并跳转登录页
       sessionStorage.removeItem('isLoggedIn')

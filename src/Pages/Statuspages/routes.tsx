@@ -51,24 +51,13 @@ function RoutesStatus(): JSX.Element {
   const [arpSearch, setArpSearch] = useState('')
   const [routeSearch, setRouteSearch] = useState('')
 
-  const getToken = () => sessionStorage.getItem('token')?.trim() || ''
-
   const fetchJSON = useCallback(async <T,>(path: string): Promise<T> => {
-    const token = getToken()
-
     const res = await apiFetch(path, {
       method: 'GET',
       headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {})
+        'Content-Type': 'application/json'
       }
     })
-
-    if (res.status === 401) {
-      sessionStorage.removeItem('isLoggedIn')
-      sessionStorage.removeItem('token')
-      throw new Error('Unauthorized')
-    }
 
     if (!res.ok) {
       const txt = await res.text().catch(() => '')

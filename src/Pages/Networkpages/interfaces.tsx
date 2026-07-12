@@ -1,8 +1,10 @@
 // src/pages/InterfacesConfiguration.tsx
 import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { toast } from 'sonner'
 import { useCurrentAllModuleStore } from '@/states/allModuleState'
 import { apiFetch } from '@/utils/http'
+import { confirmDialog } from '@/components/ui/confirm'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -241,8 +243,6 @@ export default function Interfaces(): JSX.Element {
 
   const [isSaving, setIsSaving] = useState(false)
 
-  const getToken = () => sessionStorage.getItem('token')?.trim() || ''
-
   const fetchInterfaces = useCallback(
     async (isBackground = false) => {
       if (isBackground) {
@@ -254,20 +254,9 @@ export default function Interfaces(): JSX.Element {
       setError(null)
 
       try {
-        const token = getToken()
-
         const res = await apiFetch('/api/net/interfaces', {
-          method: 'GET',
-          headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {})
-          }
+          method: 'GET'
         })
-
-        if (res.status === 401) {
-          sessionStorage.removeItem('isLoggedIn')
-          sessionStorage.removeItem('token')
-          throw new Error('Unauthorized')
-        }
 
         if (!res.ok) {
           const text = await res.text().catch(() => '')
@@ -313,22 +302,13 @@ export default function Interfaces(): JSX.Element {
   }, [fetchInterfaces])
 
   const postInterfaceAction = async (payload: SaveInterfacePayload) => {
-    const token = getToken()
-
     const res = await apiFetch('/api/net/interfaces', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {})
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload)
     })
-
-    if (res.status === 401) {
-      sessionStorage.removeItem('isLoggedIn')
-      sessionStorage.removeItem('token')
-      throw new Error('Unauthorized')
-    }
 
     if (!res.ok) {
       const text = await res.text().catch(() => '')
@@ -349,38 +329,41 @@ export default function Interfaces(): JSX.Element {
     const mask = newMask.trim()
 
     if (!name) {
-      alert('Interface name is required.')
+      toast.error('Interface name is required.')
       return
     }
 
     if (!isValidInterfaceName(name)) {
-      alert('Interface name can only contain letters, numbers, and underscore.')
+      toast.error('Interface name can only contain letters, numbers, and underscore.')
       return
     }
 
     if (!isValidIPv4(ip)) {
-      alert('Please enter a valid IPv4 address.')
+      toast.error('Please enter a valid IPv4 address.')
       return
     }
 
     if (!isValidNetmask(mask)) {
-      alert('Please enter a valid subnet mask.')
+      toast.error('Please enter a valid subnet mask.')
       return
     }
 
     const exists = interfaces.some((iface) => iface.id === name)
     if (exists) {
-      alert(`Interface "${name}" already exists.`)
+      toast.error(`Interface "${name}" already exists.`)
       return
     }
 
-    const ok = confirm(
-      `Create new LAN alias interface "${name}"?\n\n` +
+    const ok = await confirmDialog({
+      title: 'Create interface?',
+      description:
+        `Create new LAN alias interface "${name}"?\n\n` +
         `Protocol: Static address\n` +
         `Device: Alias Interface "@lan"\n` +
         `IPv4: ${ip}\n` +
-        `Netmask: ${mask}`
-    )
+        `Netmask: ${mask}`,
+      confirmText: 'Create'
+    })
 
     if (!ok) return
 
@@ -401,7 +384,7 @@ export default function Interfaces(): JSX.Element {
       await delay(1500)
       await fetchInterfaces()
     } catch (err: unknown) {
-      alert(`Error: ${getErrorMessage(err)}`)
+      toast.error('Error', { description: getErrorMessage(err) })
     } finally {
       setIsSaving(false)
     }
@@ -438,39 +421,39 @@ export default function Interfaces(): JSX.Element {
     const dnsValues = splitList(editDns)
 
     if (!isValidIPv4(ip)) {
-      alert('Please enter a valid IPv4 address.')
+      toast.error('Please enter a valid IPv4 address.')
       return
     }
 
     if (!isValidNetmask(mask)) {
-      alert('Please enter a valid subnet mask.')
+      toast.error('Please enter a valid subnet mask.')
       return
     }
 
     if (gateway && !isValidIPv4(gateway)) {
-      alert('Please enter a valid IPv4 gateway or leave it blank.')
+      toast.error('Please enter a valid IPv4 gateway or leave it blank.')
       return
     }
 
     const invalidDns = dnsValues.find((v) => !isValidIPv4(v))
     if (invalidDns) {
-      alert(`Invalid DNS server: ${invalidDns}`)
+      toast.error(`Invalid DNS server: ${invalidDns}`)
       return
     }
 
     if (editTarget.id === 'lan') {
       if (!isPositiveNumber(editDHCPStart)) {
-        alert('DHCP start must be a non-negative number.')
+        toast.error('DHCP start must be a non-negative number.')
         return
       }
 
       if (!isPositiveNumber(editDHCPLimit)) {
-        alert('DHCP limit must be a non-negative number.')
+        toast.error('DHCP limit must be a non-negative number.')
         return
       }
 
       if (!editDHCPLeaseTime.trim()) {
-        alert('DHCP lease time is required.')
+        toast.error('DHCP lease time is required.')
         return
       }
     }
@@ -482,7 +465,7 @@ export default function Interfaces(): JSX.Element {
 WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
         : `Save changes to ${editTarget.id}?`
 
-    if (!confirm(confirmMsg)) return
+    if (!(await confirmDialog({ title: 'Apply interface settings?', description: confirmMsg, confirmText: 'Save' }))) return
 
     setIsSaving(true)
 
@@ -519,10 +502,10 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
       const msg = getErrorMessage(err)
 
       if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
-        alert('Network is restarting. Please reconnect if the AC IP changed.')
+        toast.error('Network is restarting. Please reconnect if the AC IP changed.')
         setIsEditOpen(false)
       } else {
-        alert(`Error: ${msg}`)
+        toast.error('Error', { description: msg })
       }
     } finally {
       setIsSaving(false)
@@ -546,7 +529,17 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
           ? `Stop interface "${iface.id}"?`
           : `Restart interface "${iface.id}"?`
 
-    if (!confirm(warning)) return
+    if (!(await confirmDialog({
+      title:
+        action === 'delete'
+          ? 'Delete interface?'
+          : action === 'stop'
+            ? 'Stop interface?'
+            : 'Restart interface?',
+      description: warning,
+      destructive: action === 'delete',
+      confirmText: action === 'delete' ? 'Delete' : action === 'stop' ? 'Stop' : 'Restart'
+    }))) return
 
     setIsSaving(true)
 
@@ -559,7 +552,7 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
       await delay(1500)
       await fetchInterfaces()
     } catch (err: unknown) {
-      alert(`Failed to ${labels[action]} interface: ${getErrorMessage(err)}`)
+      toast.error(`Failed to ${labels[action]} interface`, { description: getErrorMessage(err) })
     } finally {
       setIsSaving(false)
     }

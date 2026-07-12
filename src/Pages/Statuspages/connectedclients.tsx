@@ -151,20 +151,9 @@ function ConnectedClients(): JSX.Element {
     }
 
     try {
-      const token = sessionStorage.getItem('token') || ''
-
       const res = await apiFetch(CLIENTS_ENDPOINT, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
+        method: 'GET'
       })
-
-      if (res.status === 401) {
-        sessionStorage.removeItem('isLoggedIn')
-        sessionStorage.removeItem('token')
-        throw new Error('Unauthorized')
-      }
 
       if (!res.ok) {
         const text = await res.text().catch(() => '')

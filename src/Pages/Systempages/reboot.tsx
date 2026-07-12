@@ -1,7 +1,9 @@
 import type { JSX } from 'react'
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { toast } from 'sonner'
 import { useCurrentAllModuleStore } from '@/states/allModuleState'
 import { apiFetch } from '@/utils/http'
+import { confirmDialog } from '@/components/ui/confirm'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Power, Server, AlertTriangle, X, Router } from 'lucide-react'
@@ -43,13 +45,13 @@ export default function Reboot(): JSX.Element {
     return currentAllModule.filter((m) => m.type !== 'Main Module')
   }, [currentAllModule])
 
-  const handleTriggerReboot = () => {
+  const handleTriggerReboot = async () => {
     const confirmMsg =
       `WARNING: You are about to reboot the full AC + AP system.\n\n` +
       `This will reboot all reachable AP modules first, then reboot the AC main module.\n\n` +
       `A ${SAFETY_DELAY}s safety countdown will start before executing.`
 
-    if (!confirm(confirmMsg)) return
+    if (!(await confirmDialog({ title: 'Reboot device?', description: confirmMsg, destructive: true, confirmText: 'Reboot' }))) return
 
     setWarnings([])
     setCountdown(SAFETY_DELAY)
@@ -63,22 +65,13 @@ export default function Reboot(): JSX.Element {
   const executeRebootAll = useCallback(async () => {
     setIsSending(true)
 
-    const token = sessionStorage.getItem('token') || ''
-
     try {
       const res = await apiFetch('/api/system/reboot', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
+          'Content-Type': 'application/json'
         }
       })
-
-      if (res.status === 401) {
-        sessionStorage.clear()
-        window.location.replace('/login')
-        return
-      }
 
       if (!res.ok) {
         const text = await res.text().catch(() => '')
@@ -89,9 +82,9 @@ export default function Reboot(): JSX.Element {
 
       if (data?.warnings && data.warnings.length > 0) {
         setWarnings(data.warnings)
-        alert('Reboot command sent, but some AP modules may not have received the command. The AC will reboot now.')
+        toast.success('Reboot command sent, but some AP modules may not have received the command. The AC will reboot now.')
       } else {
-        alert('Reboot command sent. AP modules and AC are restarting.')
+        toast.success('Reboot command sent. AP modules and AC are restarting.')
       }
 
       sessionStorage.clear()
@@ -99,7 +92,7 @@ export default function Reboot(): JSX.Element {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error(err)
-      alert(`Reboot Failed: ${msg}`)
+      toast.error('Reboot Failed', { description: msg })
       handleCancel()
     }
   }, [handleCancel])
@@ -312,7 +305,7 @@ export default function Reboot(): JSX.Element {
               variant="destructive"
               size="lg"
               className="w-full shadow-sm"
-              onClick={handleTriggerReboot}
+              onClick={() => void handleTriggerReboot()}
               disabled={isSending}
             >
               <Power className="mr-2 h-4 w-4" />

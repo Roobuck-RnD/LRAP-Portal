@@ -1,7 +1,9 @@
 import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { toast } from 'sonner'
 import { useCurrentAllModuleStore } from '@/states/allModuleState'
 import { apiFetch } from '@/utils/http'
+import { confirmDialog } from '@/components/ui/confirm'
 
 // ---------- helpers (memory UI) ----------
 function formatKiB(kib?: number | null): string {
@@ -161,33 +163,11 @@ function Overview(): JSX.Element {
     return isSub && m.ipaddress ? `?ip=${encodeURIComponent(m.ipaddress)}` : ''
   }, [])
 
-  const authHeaders = useCallback((token: string) => {
-    return {
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
-    }
-  }, [])
-
-  const jsonAuthHeaders = useCallback((token: string) => {
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
-    }
-  }, [])
-
   const fetchJSON = useCallback(
     async <T,>(path: string, who: string) => {
-      const token = sessionStorage.getItem('token')?.trim() || ''
-
       const res = await apiFetch(path, {
-        method: 'GET',
-        headers: authHeaders(token)
+        method: 'GET'
       })
-
-      if (res.status === 401) {
-        sessionStorage.removeItem('isLoggedIn')
-        sessionStorage.removeItem('token')
-        throw new Error('Unauthorized')
-      }
 
       if (!res.ok) {
         const preview = await res.text().catch(() => '')
@@ -202,15 +182,12 @@ function Overview(): JSX.Element {
 
       return (await res.json()) as T
     },
-    [authHeaders]
+    []
   )
 
   // ---------- AC-only DHCP ----------
   const loadACLeases = useCallback(
     async (cancelledRef?: { cancelled: boolean }) => {
-      const token = sessionStorage.getItem('token')?.trim() || ''
-      if (!token) return
-
       setLeasesLoading(true)
 
       try {
@@ -247,20 +224,10 @@ function Overview(): JSX.Element {
 
   const loadStaticMap = useCallback(
     async (cancelledRef?: { cancelled: boolean }) => {
-      const token = sessionStorage.getItem('token')?.trim() || ''
-      if (!token) return
-
       try {
         const res = await apiFetch('/api/lan/static-map', {
-          method: 'GET',
-          headers: authHeaders(token)
+          method: 'GET'
         })
-
-        if (res.status === 401) {
-          sessionStorage.removeItem('isLoggedIn')
-          sessionStorage.removeItem('token')
-          throw new Error('Unauthorized')
-        }
 
         if (!res.ok) {
           const preview = await res.text().catch(() => '')
@@ -295,7 +262,7 @@ function Overview(): JSX.Element {
         })
       }
     },
-    [authHeaders, mainModule?.ipaddress, mainModule?.name]
+    [mainModule?.ipaddress, mainModule?.name]
   )
 
   // ---------- overview polling ----------
@@ -465,13 +432,15 @@ function Overview(): JSX.Element {
 
   // ---------- actions: reset / set / unset ----------
   const handleResetDhcp = async () => {
-    const ok = window.confirm(
-      'This will clear current DHCP lease records on the AC and restart dnsmasq. Clients may need to renew DHCP. Continue?'
-    )
+    const ok = await confirmDialog({
+      title: 'Reset DHCP leases?',
+      description:
+        'This will clear current DHCP lease records on the AC and restart dnsmasq. Clients may need to renew DHCP. Continue?',
+      destructive: true,
+      confirmText: 'Reset'
+    })
 
     if (!ok) return
-
-    const token = sessionStorage.getItem('token')?.trim() || ''
 
     setResettingDhcp(true)
     setIsConfiguring(true)
@@ -479,15 +448,9 @@ function Overview(): JSX.Element {
     try {
       const res = await apiFetch('/api/lan/leases/reset', {
         method: 'POST',
-        headers: jsonAuthHeaders(token),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({})
       })
-
-      if (res.status === 401) {
-        sessionStorage.removeItem('isLoggedIn')
-        sessionStorage.removeItem('token')
-        throw new Error('Unauthorized')
-      }
 
       if (!res.ok) {
         const preview = await res.text().catch(() => '')
@@ -497,7 +460,7 @@ function Overview(): JSX.Element {
       await loadACLeases()
     } catch (e) {
       console.error('Reset DHCP failed:', e)
-      window.alert(`Reset DHCP failed: ${String(e)}`)
+      toast.error('Reset DHCP failed', { description: String(e) })
     } finally {
       setResettingDhcp(false)
       setIsConfiguring(false)
@@ -505,8 +468,6 @@ function Overview(): JSX.Element {
   }
 
   const handleSetStatic = async (lease: LeaseInfo) => {
-    const token = sessionStorage.getItem('token')?.trim() || ''
-
     const body = {
       hostname: lease.hostname === '(unknown)' ? '' : lease.hostname,
       mac: lease.mac.toUpperCase(),
@@ -520,15 +481,9 @@ function Overview(): JSX.Element {
     try {
       const res = await apiFetch('/api/lan/static-lease', {
         method: 'POST',
-        headers: jsonAuthHeaders(token),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       })
-
-      if (res.status === 401) {
-        sessionStorage.removeItem('isLoggedIn')
-        sessionStorage.removeItem('token')
-        throw new Error('Unauthorized')
-      }
 
       if (!res.ok) {
         const preview = await res.text().catch(() => '')
@@ -538,7 +493,7 @@ function Overview(): JSX.Element {
       await loadStaticMap()
     } catch (e) {
       console.error('Set static lease failed:', e)
-      window.alert(`Set static lease failed: ${String(e)}`)
+      toast.error('Set static lease failed', { description: String(e) })
     } finally {
       setPendingKey(null)
       setIsConfiguring(false)
@@ -546,8 +501,6 @@ function Overview(): JSX.Element {
   }
 
   const handleUnsetStatic = async (lease: LeaseInfo) => {
-    const token = sessionStorage.getItem('token')?.trim() || ''
-
     const key = `ac-${lease.mac}`
     setPendingKey(key)
     setIsConfiguring(true)
@@ -555,15 +508,9 @@ function Overview(): JSX.Element {
     try {
       const res = await apiFetch('/api/lan/static-lease', {
         method: 'DELETE',
-        headers: jsonAuthHeaders(token),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mac: lease.mac.toUpperCase() })
       })
-
-      if (res.status === 401) {
-        sessionStorage.removeItem('isLoggedIn')
-        sessionStorage.removeItem('token')
-        throw new Error('Unauthorized')
-      }
 
       if (!res.ok) {
         const preview = await res.text().catch(() => '')
@@ -573,7 +520,7 @@ function Overview(): JSX.Element {
       await loadStaticMap()
     } catch (e) {
       console.error('Unset static lease failed:', e)
-      window.alert(`Unset static lease failed: ${String(e)}`)
+      toast.error('Unset static lease failed', { description: String(e) })
     } finally {
       setPendingKey(null)
       setIsConfiguring(false)

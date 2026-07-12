@@ -99,23 +99,12 @@ export default function StaticRoutes(): JSX.Element {
     section?: string
   }>({ isOpen: false, type: 'add' })
 
-  const getToken = () => sessionStorage.getItem('token')?.trim() || ''
-
   // ---------- API Helpers ----------
 
   const fetchRoutes = useCallback(async (): Promise<StaticRoute[]> => {
-    const token = getToken()
-
     const res = await apiFetch('/api/net/static-routes', {
-      method: 'GET',
-      headers: token ? { Authorization: `Bearer ${token}` } : {}
+      method: 'GET'
     })
-
-    if (res.status === 401) {
-      sessionStorage.removeItem('isLoggedIn')
-      sessionStorage.removeItem('token')
-      throw new Error('Unauthorized')
-    }
 
     if (!res.ok) {
       const txt = await res.text().catch(() => '')
@@ -127,8 +116,6 @@ export default function StaticRoutes(): JSX.Element {
   }, [])
 
   const addRoute = useCallback(async (data: NewRouteForm) => {
-    const token = getToken()
-
     const payload: NewRouteForm = {
       interface: normalizeRouteField(data.interface),
       target: normalizeRouteField(data.target),
@@ -140,17 +127,10 @@ export default function StaticRoutes(): JSX.Element {
     const res = await apiFetch('/api/net/static-routes', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {})
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload)
     })
-
-    if (res.status === 401) {
-      sessionStorage.removeItem('isLoggedIn')
-      sessionStorage.removeItem('token')
-      throw new Error('Unauthorized')
-    }
 
     if (!res.ok) {
       const txt = await res.text().catch(() => '')
@@ -159,21 +139,12 @@ export default function StaticRoutes(): JSX.Element {
   }, [])
 
   const deleteRoute = useCallback(async (section: string) => {
-    const token = getToken()
-
     const res = await apiFetch(
       `/api/net/static-routes?section=${encodeURIComponent(section)}`,
       {
-        method: 'DELETE',
-        headers: token ? { Authorization: `Bearer ${token}` } : {}
+        method: 'DELETE'
       }
     )
-
-    if (res.status === 401) {
-      sessionStorage.removeItem('isLoggedIn')
-      sessionStorage.removeItem('token')
-      throw new Error('Unauthorized')
-    }
 
     if (!res.ok) {
       const txt = await res.text().catch(() => '')
