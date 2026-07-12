@@ -90,7 +90,6 @@ type InterfaceActionReq struct {
 	Auto      *bool             `json:"auto"`
 }
 
-const ifaceZeroSID = "00000000000000000000000000000000"
 
 var ifaceNameRe = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
 
@@ -1080,17 +1079,8 @@ uci commit firewall
 
 // ---------- AP Management Read-only ----------
 
-func ifaceManagedAPIPs() []string {
-	return []string{
-		"10.10.18.2",
-		"10.10.18.3",
-		"10.10.18.4",
-		"10.10.18.5",
-	}
-}
-
 func ifaceGetAPManagementList() []APManagementInfo {
-	ips := ifaceManagedAPIPs()
+	ips := APManagementIPs()
 	results := make([]APManagementInfo, 0, len(ips))
 
 	var wg sync.WaitGroup
@@ -1152,7 +1142,7 @@ func ifaceGetSingleAPManagement(ip string) APManagementInfo {
 }
 
 func ifaceRemoteUCISection(ip string, config string, section string) (map[string]any, error) {
-	res, err := ubusCallJSONAt(ip, ifaceZeroSID, "uci", "get", map[string]any{
+	res, err := ubusCallJSONAt(ip, AnonSID, "uci", "get", map[string]any{
 		"config":  config,
 		"section": section,
 	})
@@ -1168,7 +1158,7 @@ func ifaceRemoteUCISection(ip string, config string, section string) (map[string
 }
 
 func ifaceRemoteHostname(ip string) string {
-	res, err := ubusCallJSONAt(ip, ifaceZeroSID, "uci", "get", map[string]any{
+	res, err := ubusCallJSONAt(ip, AnonSID, "uci", "get", map[string]any{
 		"config":  "system",
 		"section": "@system[0]",
 	})
@@ -1180,7 +1170,7 @@ func ifaceRemoteHostname(ip string) string {
 		}
 	}
 
-	board, err := ubusCallJSONAt(ip, ifaceZeroSID, "system", "board", nil)
+	board, err := ubusCallJSONAt(ip, AnonSID, "system", "board", nil)
 	if err == nil {
 		if hostname, ok := board["hostname"].(string); ok && hostname != "" {
 			return hostname

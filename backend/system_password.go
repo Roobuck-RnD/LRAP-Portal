@@ -8,9 +8,13 @@ import (
 	"os/exec"
 )
 
+// adminUser is the single administrative account on this device. The change
+// password endpoint always targets it and never trusts a client-supplied name.
+const adminUser = "root"
+
 type ChangePasswordReq struct {
-	Username    string `json:"username"`
-	// OldPassword string `json:"old_password"` // 🔴 已删除：不需要旧密码
+	Username    string `json:"username"` // accepted for backward compat, but ignored (see adminUser)
+	// OldPassword string `json:"old_password"` // 已删除：不需要旧密码(接口已由 withAuth 保护,有效会话即授权)
 	NewPassword string `json:"new_password"`
 }
 
@@ -35,14 +39,14 @@ func changePasswordHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Username == "" || req.NewPassword == "" {
+	if req.NewPassword == "" {
 		http.Error(w, `{"error":"missing fields"}`, http.StatusBadRequest)
 		return
 	}
 
 	// 2. 直接调用系统命令修改密码 (Root 权限下无需旧密码)
-	// 命令：passwd <username>
-	cmd := exec.Command("passwd", req.Username)
+	// 目标账号写死为 adminUser，忽略请求体里的 username，避免越权改任意账号。
+	cmd := exec.Command("passwd", adminUser)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"system pipe failed: %v"}`, err), 500)

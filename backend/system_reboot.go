@@ -19,17 +19,6 @@ type RebootAllResponse struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
-// ---------- AP list ----------
-
-func rebootManagedAPIPs() []string {
-	return []string{
-		"10.10.18.2",
-		"10.10.18.3",
-		"10.10.18.4",
-		"10.10.18.5",
-	}
-}
-
 // ---------- Reboot Logic ----------
 
 func rebootLocalDelayed(delay time.Duration) {
@@ -45,12 +34,11 @@ func rebootRemoteAP(ip string) error {
 		return fmt.Errorf("empty target ip")
 	}
 
-	const zeroSID = "00000000000000000000000000000000"
 
 	// Use background shell so ubus file.exec can return before reboot interrupts RPC.
 	cmdStr := "(sleep 2; reboot) >/dev/null 2>&1 &"
 
-	_, err := ubusCallJSONAt(ip, zeroSID, "file", "exec", map[string]any{
+	_, err := ubusCallJSONAt(ip, AnonSID, "file", "exec", map[string]any{
 		"command": "sh",
 		"params":  []string{"-c", cmdStr},
 	})
@@ -63,7 +51,7 @@ func rebootRemoteAP(ip string) error {
 }
 
 func rebootAllModules() RebootAllResponse {
-	apIPs := rebootManagedAPIPs()
+	apIPs := APManagementIPs()
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex

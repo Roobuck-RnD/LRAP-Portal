@@ -26,12 +26,12 @@ func resolveSid(ip string, headerSid string) string {
 	headerSid = strings.TrimSpace(headerSid)
 
 	if ip != "" && ip != "127.0.0.1" && ip != "localhost" {
-		return "00000000000000000000000000000000"
+		return AnonSID
 	}
 
 	if headerSid != "" {
 		return headerSid
 	}
 
-	return "00000000000000000000000000000000"
+	return AnonSID
 }

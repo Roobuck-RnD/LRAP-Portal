@@ -20,22 +20,27 @@
         "/bin/sed": ["exec"],
         "/sbin/ifconfig": ["exec"],
         "/bin/sh": ["exec"],
-        "/sbin/reboot": ["exec"]
+        "/sbin/reboot": ["exec"],
+        "/usr/bin/mtk_sta_info": ["exec"],
+        "/etc/lrap.version": ["read"]
       },
       "uci": {
         "dhcp": ["read"],
-        "system": ["read"]
+        "system": ["read"],
+        "network": ["read"]
       }
     },
     "write": {
       "ubus": {
         "session": ["login"],
         "uci": ["add", "set", "delete", "commit", "revert", "apply"],
+        "network": ["reload"],
         "service": ["reload", "restart"]
       },
       "uci": {
         "dhcp": ["write"],
-        "system": ["write"]
+        "system": ["write"],
+        "network": ["write"]
       }
     }
   }

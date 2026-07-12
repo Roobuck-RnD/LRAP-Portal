@@ -45,17 +45,6 @@ var (
 	tzMap       map[string]string
 )
 
-// ---------- AP 列表 ----------
-
-func systemManagedAPIPs() []string {
-	return []string{
-		"10.10.18.2",
-		"10.10.18.3",
-		"10.10.18.4",
-		"10.10.18.5",
-	}
-}
-
 // ---------- Timezone ----------
 
 func loadTimezones() {
@@ -141,15 +130,7 @@ func systemLocalSIDFromRequest(r *http.Request) (string, error) {
 		return sid, nil
 	}
 
-	user := envOr("RPC_USER", "root")
-	pass := envOr("RPC_PASS", "")
-
-	sid, _, err := ubusLoginLocal(user, pass)
-	if err != nil || sid == "" {
-		return "", fmt.Errorf("local login failed: %v", err)
-	}
-
-	return sid, nil
+	return "", fmt.Errorf("unauthorized: missing session token")
 }
 
 // ---------- GET AC only ----------
@@ -238,7 +219,7 @@ func setSystemGeneral(r *http.Request, req SystemConfigReq) (SystemConfigSaveRes
 	notifySystemConfigChangeLocal(sid)
 
 	// 2. APs: sync timezone only, keep AP hostnames unchanged
-	apIPs := systemManagedAPIPs()
+	apIPs := APManagementIPs()
 	warnings := make([]string, 0)
 	synced := 0
 
@@ -277,14 +258,13 @@ func setSystemGeneral(r *http.Request, req SystemConfigReq) (SystemConfigSaveRes
 }
 
 func syncTimezoneToAP(ip string, zonename string, timezonePosix string) error {
-	const zeroSID = "00000000000000000000000000000000"
 
 	values := map[string]string{
 		"zonename": zonename,
 		"timezone": timezonePosix,
 	}
 
-	if _, err := ubusCallJSONAt(ip, zeroSID, "uci", "set", map[string]any{
+	if _, err := ubusCallJSONAt(ip, AnonSID, "uci", "set", map[string]any{
 		"config":  "system",
 		"section": "@system[0]",
 		"values":  values,
@@ -292,13 +272,13 @@ func syncTimezoneToAP(ip string, zonename string, timezonePosix string) error {
 		return fmt.Errorf("uci set failed: %v", err)
 	}
 
-	if _, err := ubusCallJSONAt(ip, zeroSID, "uci", "commit", map[string]any{
+	if _, err := ubusCallJSONAt(ip, AnonSID, "uci", "commit", map[string]any{
 		"config": "system",
 	}); err != nil {
 		return fmt.Errorf("uci commit failed: %v", err)
 	}
 
-	notifySystemConfigChangeRemote(ip, zeroSID)
+	notifySystemConfigChangeRemote(ip, AnonSID)
 
 	return nil
 }

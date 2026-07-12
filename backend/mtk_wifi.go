@@ -135,33 +135,13 @@ func init() {
 	startMtkWifiStateEnforcer()
 }
 
-// ---------- AP 列表 ----------
-
-func mtkManagedAPIPs() []string {
-	return []string{
-		"10.10.18.2",
-		"10.10.18.3",
-		"10.10.18.4",
-		"10.10.18.5",
-	}
-}
-
 // ---------- HTTP Handler ----------
 
 func mtkWifiHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	// Keep this local CORS block here as a safety net. The frontend radio toggle
-	// below uses POST instead of PATCH, because your existing global CORS already
-	// allows POST but was blocking PATCH preflight.
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
+	// CORS 与 OPTIONS 预检由全局 withCORS 中间件统一处理(尊重 CORS_ORIGIN 配置),
+	// 这里不再自设,避免覆盖配置。
 
 	if r.Header.Get("Authorization") == "" {
 		http.Error(w, `{"error":"Unauthorized"}`, http.StatusUnauthorized)
@@ -295,7 +275,7 @@ func getMtkWifiLogic() (MtkWifiInfo, error) {
 		Radio5Running:  localRuntime.Radio5Running,
 	})
 
-	apIPs := mtkManagedAPIPs()
+	apIPs := APManagementIPs()
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -554,11 +534,10 @@ func applyLocalMtkWifiAsync() {
 
 func applyRemoteMtkWifiAsync(ip string) {
 	go func() {
-		const zeroSID = "00000000000000000000000000000000"
 
 		state := getMtkRadioStateForModule(readLocalMtkCentralWifiStateDefault(), ip)
 
-		_, _ = ubusCallJSONAt(ip, zeroSID, "file", "exec", map[string]any{
+		_, _ = ubusCallJSONAt(ip, AnonSID, "file", "exec", map[string]any{
 			"command": "sh",
 			"params":  []string{"-c", mtkRemoteApplyWifiCommand(state)},
 		})
@@ -639,7 +618,7 @@ func enforceAllMtkWifiRadioStates() {
 	}
 
 	var wg sync.WaitGroup
-	for _, ip := range mtkManagedAPIPs() {
+	for _, ip := range APManagementIPs() {
 		ip := ip
 		state := getMtkRadioStateForModule(centralState, ip)
 
@@ -769,7 +748,7 @@ func defaultMtkCentralWifiState() mtkCentralWifiState {
 		UpdatedAt:      now,
 	}
 
-	for _, ip := range mtkManagedAPIPs() {
+	for _, ip := range APManagementIPs() {
 		state.Modules[ip] = mtkRadioState{
 			Radio24Enabled: true,
 			Radio5Enabled:  true,
@@ -856,7 +835,7 @@ func sanitizeMtkCentralWifiState(state mtkCentralWifiState) mtkCentralWifiState 
 		state.Modules[mtkStateMainKey] = defaultMtkRadioState()
 	}
 
-	for _, ip := range mtkManagedAPIPs() {
+	for _, ip := range APManagementIPs() {
 		if _, ok := state.Modules[ip]; !ok {
 			state.Modules[ip] = defaultMtkRadioState()
 		}
@@ -961,7 +940,6 @@ func applyRemoteMtkRadioState(ip string, state mtkRadioState) error {
 }
 
 func getRemoteMtkRadioRuntimeStatus(ip string) mtkRadioRuntimeStatus {
-	const zeroSID = "00000000000000000000000000000000"
 
 	cmd := `
 r2=0
@@ -971,7 +949,7 @@ if ifconfig rax0 2>/dev/null | grep -q UP; then r5=1; fi
 echo "$r2 $r5"
 `
 
-	res, err := ubusCallJSONAt(ip, zeroSID, "file", "exec", map[string]any{
+	res, err := ubusCallJSONAt(ip, AnonSID, "file", "exec", map[string]any{
 		"command": "sh",
 		"params":  []string{"-c", cmd},
 	})
@@ -1162,13 +1140,6 @@ func updateRemoteMtkDatFile(ip string, path string, updates map[string]string) e
 	}
 
 	return nil
-}
-
-func updateRemoteDatKey(ip string, path string, key string, value string) error {
-	if key == "" {
-		return fmt.Errorf("empty key")
-	}
-	return updateRemoteMtkDatFile(ip, path, map[string]string{key: value})
 }
 
 // ---------- 校验与映射 ----------
@@ -1392,34 +1363,6 @@ func mtkWidthFromDat5G(htBW string, vhtBW string) string {
 
 // ---------- 远程读取 ----------
 
-func ubusFileWriteRemoteCreate(ip, path, content string) error {
-	delimiter := "__MTK_WIFI_STATE_EOF__"
-	for i := 0; strings.Contains(content, "\n"+delimiter+"\n") || strings.HasSuffix(content, "\n"+delimiter) || strings.HasPrefix(content, delimiter+"\n"); i++ {
-		delimiter = fmt.Sprintf("__MTK_WIFI_STATE_EOF_%d__", i)
-	}
-
-	cmd := fmt.Sprintf(`
-path=%s
-if [ -z "$path" ]; then
-	exit 1
-fi
-
-dir="${path%%/*}"
-if [ "$dir" != "$path" ]; then
-	mkdir -p "$dir" || exit 1
-fi
-
-tmp="${path}.tmp.$$"
-cat > "$tmp" <<'%s'
-%s
-%s
-mv "$tmp" "$path"
-`, shellSingleQuote(path), delimiter, content, delimiter)
-
-	_, err := ubusExecRemoteChecked(ip, cmd)
-	return err
-}
-
 func ubusFileWriteRemote(ip, path, content string) error {
 	delimiter := "__MTK_WIFI_CONFIG_EOF__"
 	for i := 0; strings.Contains(content, "\n"+delimiter+"\n") || strings.HasSuffix(content, "\n"+delimiter) || strings.HasPrefix(content, delimiter+"\n"); i++ {
@@ -1452,9 +1395,8 @@ func shellSingleQuote(s string) string {
 }
 
 func ubusExecRemoteChecked(ip string, cmd string) (map[string]any, error) {
-	const zeroSID = "00000000000000000000000000000000"
 
-	res, err := ubusCallJSONAt(ip, zeroSID, "file", "exec", map[string]any{
+	res, err := ubusCallJSONAt(ip, AnonSID, "file", "exec", map[string]any{
 		"command": "sh",
 		"params":  []string{"-c", cmd},
 	})
@@ -1532,9 +1474,8 @@ func stringFromAny(v any) string {
 }
 
 func ubusFileReadRemote(ip, path string) (string, error) {
-	const zeroSID = "00000000000000000000000000000000"
 
-	res, err := ubusCallJSONAt(ip, zeroSID, "file", "read", map[string]any{
+	res, err := ubusCallJSONAt(ip, AnonSID, "file", "read", map[string]any{
 		"path": path,
 	})
 	if err != nil {
@@ -1551,20 +1492,14 @@ func ubusFileReadRemote(ip, path string) (string, error) {
 // ---------- 小工具 ----------
 
 func hostnameFromLocalOrFallback() string {
-	user := envOr("RPC_USER", "root")
-	pass := envOr("RPC_PASS", "")
-
-	sid, _, err := ubusLoginLocal(user, pass)
-	if err != nil || sid == "" {
-		return "Main Module"
-	}
-
+	// system board 在 AC 的匿名 ACL 下可读,足以拿到真实 hostname;uci get 匿名会
+	// 失败(跳过)。旧的 root 空密码登录本就登不上。
 	params := map[string]any{
 		"config":  "system",
 		"section": "@system[0]",
 	}
 
-	res, err := ubusCallJSONLocal(sid, "uci", "get", params)
+	res, err := ubusCallJSONLocal(AnonSID, "uci", "get", params)
 	if err == nil {
 		if values, ok := res["values"].(map[string]any); ok {
 			if hostname, ok2 := values["hostname"].(string); ok2 && hostname != "" {
@@ -1573,7 +1508,7 @@ func hostnameFromLocalOrFallback() string {
 		}
 	}
 
-	board, err := ubusCallJSONLocal(sid, "system", "board", nil)
+	board, err := ubusCallJSONLocal(AnonSID, "system", "board", nil)
 	if err == nil {
 		if hostname, ok := board["hostname"].(string); ok && hostname != "" {
 			return hostname
@@ -1584,14 +1519,13 @@ func hostnameFromLocalOrFallback() string {
 }
 
 func mtkRemoteHostname(ip string) string {
-	const zeroSID = "00000000000000000000000000000000"
 
 	params := map[string]any{
 		"config":  "system",
 		"section": "@system[0]",
 	}
 
-	res, err := ubusCallJSONAt(ip, zeroSID, "uci", "get", params)
+	res, err := ubusCallJSONAt(ip, AnonSID, "uci", "get", params)
 	if err == nil {
 		if values, ok := res["values"].(map[string]any); ok {
 			if hostname, ok2 := values["hostname"].(string); ok2 && hostname != "" {
@@ -1600,7 +1534,7 @@ func mtkRemoteHostname(ip string) string {
 		}
 	}
 
-	board, err := ubusCallJSONAt(ip, zeroSID, "system", "board", nil)
+	board, err := ubusCallJSONAt(ip, AnonSID, "system", "board", nil)
 	if err == nil {
 		if hostname, ok := board["hostname"].(string); ok && hostname != "" {
 			return hostname

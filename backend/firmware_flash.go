@@ -393,7 +393,7 @@ func firmwareStartBundleUpgradeJob(r *http.Request, uploadedPath string, keepSet
 	// Bundle upgrades in this product target the fixed AP management range.
 	// The UI may miss an AP while it is rebooting or absent from ARP, so do not
 	// depend only on the frontend-discovered module list. Always include 10.10.18.2-5.
-	targetIPs := firmwareMergeIPs(firmwareDefaultAPTargets(), requestedTargetIPs)
+	targetIPs := firmwareMergeIPs(APManagementIPs(), requestedTargetIPs)
 
 	if len(targetIPs) == 0 {
 		_ = os.Remove(bundle.MainPath)
@@ -819,26 +819,6 @@ func firmwareCopyBundlePartToTemp(f *os.File, start int64, size int64, role stri
 	return path, hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func firmwareWriteTempImage(role string, img []byte) (string, error) {
-	tmp, err := os.CreateTemp("/tmp", "lrap-"+role+"-*.bin")
-	if err != nil {
-		return "", err
-	}
-	defer tmp.Close()
-
-	if _, err := tmp.Write(img); err != nil {
-		_ = os.Remove(tmp.Name())
-		return "", err
-	}
-
-	if err := tmp.Sync(); err != nil {
-		_ = os.Remove(tmp.Name())
-		return "", err
-	}
-
-	return tmp.Name(), nil
-}
-
 func firmwarePrecheckAPsAndUpdateJob(jobID string, targetIPs []string) ([]firmwareAPUpgradeState, bool) {
 	cleanIPs := firmwareMergeIPs(targetIPs, nil)
 	states := make([]firmwareAPUpgradeState, 0, len(cleanIPs))
@@ -1164,7 +1144,6 @@ func firmwareReadRemoteInterfaceMAC(ip string) (string, error) {
 }
 
 func firmwareReadRemoteText(ip string, path string) (string, error) {
-	const zeroSID = "00000000000000000000000000000000"
 
 	ip = strings.TrimSpace(ip)
 	path = strings.TrimSpace(path)
@@ -1174,7 +1153,7 @@ func firmwareReadRemoteText(ip string, path string) (string, error) {
 
 	// Prefer file.exec because AP ACLs in this project already allow it for firmware tasks.
 	// Use a timeout wrapper so one unresponsive AP cannot block the whole background job forever.
-	res, err := firmwareUbusCallAtWithTimeout(ip, zeroSID, "file", "exec", map[string]any{
+	res, err := firmwareUbusCallAtWithTimeout(ip, AnonSID, "file", "exec", map[string]any{
 		"command": "sh",
 		"params":  []string{"-c", "cat " + shellQuote(path) + " 2>/dev/null"},
 	}, firmwareRemoteCallTimeout)
@@ -1188,7 +1167,7 @@ func firmwareReadRemoteText(ip string, path string) (string, error) {
 	}
 
 	// Fallback to file.read when ACL allows a specific path.
-	res, readErr := firmwareUbusCallAtWithTimeout(ip, zeroSID, "file", "read", map[string]any{
+	res, readErr := firmwareUbusCallAtWithTimeout(ip, AnonSID, "file", "read", map[string]any{
 		"path": path,
 	}, firmwareRemoteCallTimeout)
 	if readErr != nil {
@@ -1224,10 +1203,6 @@ func firmwareUbusCallAtWithTimeout(ip string, sid string, object string, method 
 	case <-time.After(timeout):
 		return nil, fmt.Errorf("timeout after %s calling %s.%s on %s", timeout, object, method, ip)
 	}
-}
-
-func firmwareDefaultAPTargets() []string {
-	return []string{"10.10.18.2", "10.10.18.3", "10.10.18.4", "10.10.18.5"}
 }
 
 func firmwareAPIPsFromStates(states []firmwareAPUpgradeState) []string {
@@ -1383,14 +1358,6 @@ func firmwareStartDnsmasqService() error {
 	return nil
 }
 
-func firmwareRestartDnsmasq() error {
-	out, err := exec.Command("/etc/init.d/dnsmasq", "restart").CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("dnsmasq restart failed: %w output=%s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
 // ---------- Compatibility: old AP-only mode ----------
 
 func firmwareHandleLegacyAPUpgrade(r *http.Request, uploadedPath string, filename string, keepSettings bool, targetIPs []string) (FirmwareFlashResponse, error) {
@@ -1429,7 +1396,7 @@ func firmwareHandleLegacyAPUpgrade(r *http.Request, uploadedPath string, filenam
 	}
 
 	if allDispatchOK {
-		cleanupIPs := firmwareMergeIPs(firmwareDefaultAPTargets(), targetIPs)
+		cleanupIPs := firmwareMergeIPs(APManagementIPs(), targetIPs)
 		removedLeases, cleanupErr := firmwareClearLocalDHCPLeasesForIPs(cleanupIPs)
 		cleanupResult := FirmwareFlashResult{
 			Role:   "dhcp",
@@ -1498,43 +1465,6 @@ func firmwareDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, filename, time.Now(), f)
 }
 
-// ---------- Save Upload ----------
-
-func firmwareSaveUpload(file multipart.File, header *multipart.FileHeader) (string, error) {
-	if header == nil {
-		return "", fmt.Errorf("missing file header")
-	}
-
-	name := filepath.Base(header.Filename)
-	if name == "." || name == "/" || name == "" {
-		name = "firmware.bin"
-	}
-
-	tmp, err := os.CreateTemp("/tmp", "lrap-firmware-*.bin")
-	if err != nil {
-		return "", err
-	}
-	defer tmp.Close()
-
-	written, err := io.Copy(tmp, file)
-	if err != nil {
-		_ = os.Remove(tmp.Name())
-		return "", err
-	}
-
-	if written <= 0 {
-		_ = os.Remove(tmp.Name())
-		return "", fmt.Errorf("empty firmware file")
-	}
-
-	if err := tmp.Sync(); err != nil {
-		_ = os.Remove(tmp.Name())
-		return "", err
-	}
-
-	return tmp.Name(), nil
-}
-
 // ---------- Local AC sysupgrade ----------
 
 func firmwareStartLocalSysupgrade(path string, keepSettings bool) {
@@ -1564,7 +1494,6 @@ func firmwareCommandAPWgetAndFlash(ip string, downloadURL string, keepSettings b
 		return fmt.Errorf("empty download URL")
 	}
 
-	const zeroSID = "00000000000000000000000000000000"
 
 	apFirmwarePath := "/tmp/lrap-ap-firmware.bin"
 	apLogPath := "/tmp/lrap-firmware-upgrade.log"
@@ -1593,7 +1522,7 @@ func firmwareCommandAPWgetAndFlash(ip string, downloadURL string, keepSettings b
 	// Bad/empty ubus body is still treated as a real dispatch failure. The fix is
 	// that the command which must return through ubus is now minimal.
 	workerScript := firmwareBuildAPUpgradeWorkerScript(apFirmwarePath, apLogPath, downloadURL, keepValue)
-	if err := firmwareWriteRemoteText(ip, zeroSID, apWorkerPath, workerScript, 0700); err != nil {
+	if err := firmwareWriteRemoteText(ip, AnonSID, apWorkerPath, workerScript, 0700); err != nil {
 		return fmt.Errorf("remote AP worker script write failed: %v", err)
 	}
 
@@ -1602,7 +1531,7 @@ func firmwareCommandAPWgetAndFlash(ip string, downloadURL string, keepSettings b
 		shellQuote(apWorkerPath),
 	)
 
-	res, err := firmwareUbusCallAtWithTimeout(ip, zeroSID, "file", "exec", map[string]any{
+	res, err := firmwareUbusCallAtWithTimeout(ip, AnonSID, "file", "exec", map[string]any{
 		"command": "sh",
 		"params":  []string{"-c", cmd},
 	}, 12*time.Second)
@@ -1760,7 +1689,7 @@ func firmwareBuildDownloadURL(r *http.Request, id string) string {
 	}
 
 	if acIP == "" {
-		acIP = "10.10.18.1"
+		acIP = ACManagementIP
 	}
 
 	// IMPORTANT:
@@ -1818,26 +1747,21 @@ func firmwarePortSuffixFromRequest(r *http.Request) string {
 }
 
 func firmwareDetectACLANIP() string {
-	// Prefer runtime IP from ifstatus-like ubus if available.
-	user := envOr("RPC_USER", "root")
-	pass := envOr("RPC_PASS", "")
-
-	sid, _, err := ubusLoginLocal(user, pass)
-	if err == nil && sid != "" {
-		st, err := ubusCallJSONLocal(sid, "network.interface.lan", "status", nil)
-		if err == nil {
-			if arr, ok := st["ipv4-address"].([]any); ok && len(arr) > 0 {
-				if m, ok := arr[0].(map[string]any); ok {
-					if addr, ok := m["address"].(string); ok && addr != "" {
-						return addr
-					}
+	// Prefer runtime LAN IP via ubus. The AC's rpcd unauthenticated ACL permits
+	// network.interface.lan status, so the anonymous SID is enough here.
+	st, err := ubusCallJSONLocal(AnonSID, "network.interface.lan", "status", nil)
+	if err == nil {
+		if arr, ok := st["ipv4-address"].([]any); ok && len(arr) > 0 {
+			if m, ok := arr[0].(map[string]any); ok {
+				if addr, ok := m["address"].(string); ok && addr != "" {
+					return addr
 				}
 			}
 		}
 	}
 
-	// Fallback: common AC LAN IP in this project.
-	return "10.10.18.1"
+	// Fallback: fixed AC LAN IP for this project.
+	return ACManagementIP
 }
 
 // ---------- Helpers ----------
