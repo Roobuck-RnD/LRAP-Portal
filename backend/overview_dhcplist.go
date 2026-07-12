@@ -30,13 +30,6 @@ type ResetDhcpResponse struct {
 	Message string `json:"message,omitempty"`
 }
 
-var reservedAPDHCPIPs = map[string]bool{
-	"10.10.18.2": true,
-	"10.10.18.3": true,
-	"10.10.18.4": true,
-	"10.10.18.5": true,
-}
-
 // GET /api/lan/leases
 // AC+AP 架构下，DHCP 只在 AC 主模块上运行。
 // 因此这里永远只读取主模块本机 /tmp/dhcp.leases，不再支持 ?ip= 子模块读取。
@@ -109,20 +102,7 @@ func getLocalSIDFromRequest(r *http.Request) (string, error) {
 		return sid, nil
 	}
 
-	user := envOr("RPC_USER", "root")
-	pass := envOr("RPC_PASS", "")
-
-	var extra map[string]any
-	var err error
-
-	sid, extra, err = ubusLoginLocal(user, pass)
-	_ = extra
-
-	if err != nil || sid == "" {
-		return "", fmt.Errorf("ubus login failed: %v", err)
-	}
-
-	return sid, nil
+	return "", fmt.Errorf("unauthorized: missing session token")
 }
 
 // ---------- Reset DHCP ----------
@@ -270,7 +250,7 @@ func parseLeasesText(s string) []LeaseInfo {
 }
 
 func isReservedAPDHCPIP(ip string) bool {
-	return reservedAPDHCPIPs[strings.TrimSpace(ip)]
+	return IsManagedAPIP(strings.TrimSpace(ip))
 }
 
 func parseInt64(s string) (int64, error) {

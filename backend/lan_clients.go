@@ -87,17 +87,16 @@ func hostnameFromLocal(sid string) string {
 	return ""
 }
 
-// 子模块 hostname：继续沿用你的 zeroSID 方案
+// 子模块 hostname：继续沿用你的 AnonSID 方案
 // 前提：你已经在子模块 ACL 里允许对应 ubus 调用
 func resolveRemoteHostname(ip string) string {
-	const zeroSID = "00000000000000000000000000000000"
 
 	params := map[string]any{
 		"config":  "system",
 		"section": "@system[0]",
 	}
 
-	res, err := ubusCallJSONAt(ip, zeroSID, "uci", "get", params)
+	res, err := ubusCallJSONAt(ip, AnonSID, "uci", "get", params)
 	if err != nil {
 		return ""
 	}
@@ -112,16 +111,6 @@ func resolveRemoteHostname(ip string) string {
 }
 
 // ------- 探测与本地表解析 -------
-
-// 固定子模块 IP，临时先写死
-func staticAPIPs() []string {
-	return []string{
-		"10.10.18.2",
-		"10.10.18.3",
-		"10.10.18.4",
-		"10.10.18.5",
-	}
-}
 
 // 并发 ping，但等待全部 ping 完成后再继续读 ARP
 // 修复你之前 go ping 后马上读 ARP 的竞态问题
@@ -282,23 +271,10 @@ func lanClientsHandler(w http.ResponseWriter, r *http.Request) {
 		sid = auth[7:]
 	}
 
-	if sid == "" {
-		user := envOr("RPC_USER", "root")
-		pass := envOr("RPC_PASS", "")
-
-		var extra map[string]any
-		var err error
-
-		sid, extra, err = ubusLoginLocal(user, pass)
-		_ = extra
-
-		if err != nil || sid == "" {
-			log.Printf("lanClients: local login failed: %v", err)
-		}
-	}
+	// sid 来自请求 Bearer(接口已由 withAuth 保证存在)。
 
 	// 2) 主动探测静态 AP IP，并等待 ping 完成
-	apIPs := staticAPIPs()
+	apIPs := APManagementIPs()
 	probeStaticIPs(apIPs)
 
 	// 3) 主模块自己

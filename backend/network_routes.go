@@ -43,15 +43,7 @@ func srResolveLocalSID(headerSid string) (string, error) {
 		return headerSid, nil
 	}
 
-	user := envOr("RPC_USER", "root")
-	pass := envOr("RPC_PASS", "")
-
-	sid, _, err := ubusLoginLocal(user, pass)
-	if err != nil || sid == "" {
-		return "", fmt.Errorf("local ubus login failed: %v", err)
-	}
-
-	return sid, nil
+	return "", fmt.Errorf("unauthorized: missing session token")
 }
 
 func srValidateRoute(req StaticRouteConfig) error {

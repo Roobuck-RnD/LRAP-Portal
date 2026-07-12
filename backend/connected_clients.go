@@ -110,17 +110,6 @@ type ccMtkStaError struct {
 	Error string `json:"error"`
 }
 
-// ---------- Candidate AP IPs ----------
-
-func ccManagedAPIPs() []string {
-	return []string{
-		"10.10.18.2",
-		"10.10.18.3",
-		"10.10.18.4",
-		"10.10.18.5",
-	}
-}
-
 // ---------- HTTP Handler ----------
 
 func connectedClientsHandler(w http.ResponseWriter, r *http.Request) {
@@ -207,7 +196,7 @@ func ccBuildMainModule(leases map[string]ccDhcpLease, arpByMAC map[string]ccArpE
 // ---------- AP Modules ----------
 
 func ccBuildAPModules(leases map[string]ccDhcpLease, arpByMAC map[string]ccArpEntry) []ConnectedClientModule {
-	ips := ccManagedAPIPs()
+	ips := APManagementIPs()
 	out := make([]ConnectedClientModule, 0, len(ips))
 
 	var wg sync.WaitGroup
@@ -339,9 +328,8 @@ func ccRunLocalStaHelper(iface string) (string, error) {
 }
 
 func ccRunRemoteStaHelper(ip string, iface string) (string, error) {
-	const zeroSID = "00000000000000000000000000000000"
 
-	res, err := ubusCallJSONAt(ip, zeroSID, "file", "exec", map[string]any{
+	res, err := ubusCallJSONAt(ip, AnonSID, "file", "exec", map[string]any{
 		"command": ccStaHelperPath,
 		"params":  []string{iface},
 	})
@@ -712,7 +700,6 @@ func ccModuleOwnMACSet(mod *ConnectedClientModule) map[string]bool {
 }
 
 func ccGetRemoteBridgeFDB(ip string) []ccFDBEntry {
-	const zeroSID = "00000000000000000000000000000000"
 
 	// Do not call "bridge" directly here. On many OpenWrt images ubus file.exec
 	// does not get the same PATH as an interactive shell, so "bridge" can be
@@ -731,7 +718,7 @@ else
 fi
 `
 
-	res, err := ubusCallJSONAt(ip, zeroSID, "file", "exec", map[string]any{
+	res, err := ubusCallJSONAt(ip, AnonSID, "file", "exec", map[string]any{
 		"command": "sh",
 		"params":  []string{"-c", cmd},
 	})
@@ -798,313 +785,6 @@ func ccParseBridgeFDBText(raw string) []ccFDBEntry {
 	}
 
 	return out
-}
-
-// ---------- Convert Stations to Clients ----------
-
-func ccStationsToClients(stations []ccWirelessStation, leases map[string]ccDhcpLease) []ConnectedClient {
-	clients := make([]ConnectedClient, 0, len(stations))
-
-	for _, st := range stations {
-		mac := strings.ToUpper(st.MAC)
-
-		hostname := "(unknown)"
-		ip := ""
-
-		if lease, ok := leases[mac]; ok {
-			if lease.Hostname != "" {
-				hostname = lease.Hostname
-			}
-			ip = lease.IP
-		}
-
-		signal := st.Signal
-		if signal == "" {
-			signal = ccSignalText(st.RSSI)
-		}
-
-		clients = append(clients, ConnectedClient{
-			Hostname:         hostname,
-			IP:               ip,
-			MAC:              mac,
-			SSID:             st.SSID,
-			Band:             st.Band,
-			Interface:        st.Interface,
-			RSSI:             st.RSSI,
-			Signal:           signal,
-			ConnectedTime:    st.ConnectedTime,
-			ConnectedSeconds: st.ConnectedSeconds,
-		})
-	}
-
-	ccSortClients(clients)
-
-	return clients
-}
-
-// ---------- FDB-driven Rebuild ----------
-
-func ccRebuildClientsFromFDB(
-	mainModule *ConnectedClientModule,
-	apModules []ConnectedClientModule,
-	leases map[string]ccDhcpLease,
-	arpByMAC map[string]ccArpEntry,
-	fdbEntries []ccFDBEntry,
-) {
-	if mainModule == nil {
-		return
-	}
-
-	modules := make([]*ConnectedClientModule, 0, 1+len(apModules))
-	modules = append(modules, mainModule)
-
-	for i := range apModules {
-		modules = append(modules, &apModules[i])
-	}
-
-	// 收集 helper 返回的无线详情。
-	// 注意：这些详情可能有残留，所以不作为“在线”的判断依据。
-	helperByModule := make(map[string]map[string]ConnectedClient)
-
-	for _, mod := range modules {
-		key := ccModuleKey(mod)
-
-		if helperByModule[key] == nil {
-			helperByModule[key] = make(map[string]ConnectedClient)
-		}
-
-		for _, c := range mod.Clients {
-			mac := strings.ToUpper(c.MAC)
-			if mac == "" {
-				continue
-			}
-
-			helperByModule[key][mac] = c
-		}
-	}
-
-	apByIP := make(map[string]*ConnectedClientModule)
-	apMacSet := make(map[string]bool)
-	apIPSet := make(map[string]bool)
-
-	for i := range apModules {
-		ap := &apModules[i]
-
-		if ap.IP != "" {
-			apByIP[ap.IP] = ap
-			apIPSet[ap.IP] = true
-		}
-
-		if ap.BrLanMAC != "" {
-			apMacSet[strings.ToUpper(ap.BrLanMAC)] = true
-		}
-
-		if ap.MAC != "" {
-			apMacSet[strings.ToUpper(ap.MAC)] = true
-		}
-	}
-
-	// 如果某个 AP 的 br-lan MAC 没通过 ubus 拿到，用主模块 ARP 表补。
-	for mac, arp := range arpByMAC {
-		if ap, ok := apByIP[arp.IP]; ok {
-			if ap.MAC == "" {
-				ap.MAC = strings.ToUpper(mac)
-			}
-			if ap.BrLanMAC == "" {
-				ap.BrLanMAC = strings.ToUpper(mac)
-			}
-			apMacSet[strings.ToUpper(mac)] = true
-		}
-	}
-
-	// port -> AP
-	// 通过 AP 自己的 br-lan MAC 所在端口建立映射。
-	// 不假设 lan1/lan2/lan3/lan4 和 AP 编号有固定关系。
-	portToAP := make(map[string]*ConnectedClientModule)
-
-	for _, f := range fdbEntries {
-		fmac := strings.ToUpper(f.MAC)
-
-		if !apMacSet[fmac] {
-			continue
-		}
-
-		// 优先通过 AP br-lan MAC 匹配。
-		for i := range apModules {
-			ap := &apModules[i]
-
-			if ap.BrLanMAC != "" && strings.EqualFold(ap.BrLanMAC, fmac) {
-				portToAP[f.Port] = ap
-				break
-			}
-
-			if ap.MAC != "" && strings.EqualFold(ap.MAC, fmac) {
-				portToAP[f.Port] = ap
-				break
-			}
-		}
-
-		// 如果 MAC 没匹配上，用 ARP 的 IP 反查 AP。
-		if _, exists := portToAP[f.Port]; !exists {
-			if arp, ok := arpByMAC[fmac]; ok {
-				if ap, ok2 := apByIP[arp.IP]; ok2 {
-					portToAP[f.Port] = ap
-				}
-			}
-		}
-	}
-
-	// 清空所有 module clients，稍后只根据 FDB 重新放入。
-	for _, mod := range modules {
-		mod.Clients = nil
-	}
-
-	fallbackSSID := ccGetLocalSSID24()
-	seenClientMAC := make(map[string]bool)
-
-	for _, f := range fdbEntries {
-		mac := strings.ToUpper(f.MAC)
-
-		if !ccIsUnicastMAC(mac) {
-			continue
-		}
-
-		if seenClientMAC[mac] {
-			continue
-		}
-
-		// 跳过主模块自己的 MAC。
-		if mainModule.BrLanMAC != "" && strings.EqualFold(mainModule.BrLanMAC, mac) {
-			continue
-		}
-		if mainModule.MAC != "" && strings.EqualFold(mainModule.MAC, mac) {
-			continue
-		}
-		if mainModule.Ra0MAC != "" && strings.EqualFold(mainModule.Ra0MAC, mac) {
-			continue
-		}
-		if mainModule.Rax0MAC != "" && strings.EqualFold(mainModule.Rax0MAC, mac) {
-			continue
-		}
-
-		// 跳过 AP 自己的 br-lan MAC。
-		if apMacSet[mac] {
-			continue
-		}
-
-		owner := ccOwnerFromFDBPort(f.Port, mainModule, portToAP)
-		if owner == nil {
-			continue
-		}
-
-		lease, hasLease := leases[mac]
-
-		// 跳过 AP 管理 IP。
-		if hasLease && apIPSet[lease.IP] {
-			continue
-		}
-
-		ownerKey := ccModuleKey(owner)
-		helperClient, hasHelper := helperByModule[ownerKey][mac]
-
-		// 如果没有 DHCP，也没有 owner 模块的 helper 详情，则不显示。
-		if !hasLease && !hasHelper {
-			continue
-		}
-
-		client := ConnectedClient{
-			MAC:      mac,
-			Hostname: "(unknown)",
-			Signal:   "Unknown",
-			SSID:     fallbackSSID,
-			Band:     "2.4G",
-		}
-
-		if hasHelper {
-			client = helperClient
-			client.MAC = mac
-
-			if client.Signal == "" {
-				client.Signal = ccSignalText(client.RSSI)
-			}
-		}
-
-		if hasLease {
-			if lease.Hostname != "" {
-				client.Hostname = lease.Hostname
-			}
-			if lease.IP != "" {
-				client.IP = lease.IP
-			}
-		}
-
-		if arp, ok := arpByMAC[mac]; ok && arp.IP != "" {
-			client.IP = arp.IP
-		}
-
-		if client.SSID == "" {
-			client.SSID = fallbackSSID
-		}
-
-		if client.Band == "" {
-			client.Band = "2.4G"
-		}
-
-		if client.Signal == "" {
-			client.Signal = ccSignalText(client.RSSI)
-		}
-
-		owner.Clients = append(owner.Clients, client)
-		seenClientMAC[mac] = true
-	}
-
-	for _, mod := range modules {
-		ccSortModuleClients(mod)
-	}
-}
-
-func ccOwnerFromFDBPort(
-	port string,
-	mainModule *ConnectedClientModule,
-	portToAP map[string]*ConnectedClientModule,
-) *ConnectedClientModule {
-	if port == "" {
-		return nil
-	}
-
-	if port == ccWirelessIF24G || port == ccWirelessIF5G {
-		return mainModule
-	}
-
-	if ap, ok := portToAP[port]; ok {
-		return ap
-	}
-
-	return nil
-}
-
-func ccModuleKey(mod *ConnectedClientModule) string {
-	if mod == nil {
-		return ""
-	}
-
-	if mod.Type == "main" {
-		return "main"
-	}
-
-	if mod.IP != "" {
-		return "ap:" + mod.IP
-	}
-
-	if mod.BrLanMAC != "" {
-		return "ap-mac:" + strings.ToUpper(mod.BrLanMAC)
-	}
-
-	if mod.MAC != "" {
-		return "ap-mac:" + strings.ToUpper(mod.MAC)
-	}
-
-	return "module:" + mod.Name
 }
 
 func ccIsUnicastMAC(mac string) bool {
@@ -1290,9 +970,8 @@ func ccGetRemoteSSID5(ip string) string {
 }
 
 func ccGetRemoteSSIDFromPath(ip string, path string, fallback string) string {
-	const zeroSID = "00000000000000000000000000000000"
 
-	res, err := ubusCallJSONAt(ip, zeroSID, "file", "read", map[string]any{
+	res, err := ubusCallJSONAt(ip, AnonSID, "file", "read", map[string]any{
 		"path": path,
 	})
 	if err != nil {
@@ -1326,16 +1005,9 @@ func ccParseSSIDFromDat(content string) string {
 // ---------- Module Info Helpers ----------
 
 func ccGetLocalSID() string {
-	user := envOr("RPC_USER", "root")
-	pass := envOr("RPC_PASS", "")
-
-	sid, _, err := ubusLoginLocal(user, pass)
-	if err != nil || sid == "" {
-		log.Printf("connectedClients: local ubus login failed: %v", err)
-		return ""
-	}
-
-	return sid
+	// 本机匿名可读的项(system board、dhcp.leases 文件等)用 AnonSID;需鉴权的
+	// uci 读取匿名会失败、调用方自行回退。旧的 root 空密码登录本就登不上。
+	return AnonSID
 }
 
 func ccLocalHostname(sid string) string {
@@ -1473,14 +1145,13 @@ func ccReadSysfsMAC(dev string) string {
 }
 
 func ccRemoteDeviceMAC(ip string, dev string) string {
-	const zeroSID = "00000000000000000000000000000000"
 
 	if ip == "" || dev == "" {
 		return ""
 	}
 
 	// 1. 优先通过 ubus network.device status 读取
-	st, err := ubusCallJSONAt(ip, zeroSID, "network.device", "status", map[string]any{
+	st, err := ubusCallJSONAt(ip, AnonSID, "network.device", "status", map[string]any{
 		"name": dev,
 	})
 	if err == nil {
@@ -1503,13 +1174,12 @@ func ccRemoteDeviceMAC(ip string, dev string) string {
 }
 
 func ccRemoteReadSysfsMAC(ip string, dev string) string {
-	const zeroSID = "00000000000000000000000000000000"
 
 	if ip == "" || dev == "" {
 		return ""
 	}
 
-	res, err := ubusCallJSONAt(ip, zeroSID, "file", "read", map[string]any{
+	res, err := ubusCallJSONAt(ip, AnonSID, "file", "read", map[string]any{
 		"path": "/sys/class/net/" + dev + "/address",
 	})
 	if err != nil {
@@ -1527,13 +1197,12 @@ func ccRemoteReadSysfsMAC(ip string, dev string) string {
 }
 
 func ccRemoteReadIfconfigMAC(ip string, dev string) string {
-	const zeroSID = "00000000000000000000000000000000"
 
 	if ip == "" || dev == "" {
 		return ""
 	}
 
-	res, err := ubusCallJSONAt(ip, zeroSID, "file", "exec", map[string]any{
+	res, err := ubusCallJSONAt(ip, AnonSID, "file", "exec", map[string]any{
 		"command": "ifconfig",
 		"params":  []string{dev},
 	})
@@ -1591,14 +1260,13 @@ func ccValidMAC(mac string) bool {
 }
 
 func ccRemoteHostname(ip string) string {
-	const zeroSID = "00000000000000000000000000000000"
 
 	params := map[string]any{
 		"config":  "system",
 		"section": "@system[0]",
 	}
 
-	res, err := ubusCallJSONAt(ip, zeroSID, "uci", "get", params)
+	res, err := ubusCallJSONAt(ip, AnonSID, "uci", "get", params)
 	if err == nil {
 		if values, ok := res["values"].(map[string]any); ok {
 			if hostname, ok2 := values["hostname"].(string); ok2 && hostname != "" {
@@ -1607,7 +1275,7 @@ func ccRemoteHostname(ip string) string {
 		}
 	}
 
-	board, err := ubusCallJSONAt(ip, zeroSID, "system", "board", nil)
+	board, err := ubusCallJSONAt(ip, AnonSID, "system", "board", nil)
 	if err == nil {
 		if hostname, ok := board["hostname"].(string); ok && hostname != "" {
 			return hostname

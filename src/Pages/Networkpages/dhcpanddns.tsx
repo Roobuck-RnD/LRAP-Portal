@@ -97,23 +97,12 @@ export default function DHCPandDNS(): JSX.Element {
 
   const [isProcessing, setIsProcessing] = useState(false)
 
-  const getToken = () => sessionStorage.getItem('token')?.trim() || ''
-
   // ---------- API Helpers ----------
 
   const fetchLeases = useCallback(async (): Promise<StaticLease[]> => {
-    const token = getToken()
-
     const res = await apiFetch('/api/lan/static-leases-config', {
-      method: 'GET',
-      headers: token ? { Authorization: `Bearer ${token}` } : {}
+      method: 'GET'
     })
-
-    if (res.status === 401) {
-      sessionStorage.removeItem('isLoggedIn')
-      sessionStorage.removeItem('token')
-      throw new Error('Unauthorized')
-    }
 
     if (!res.ok) {
       const txt = await res.text().catch(() => '')
@@ -125,8 +114,6 @@ export default function DHCPandDNS(): JSX.Element {
   }, [])
 
   const addLease = useCallback(async (data: NewLeaseForm) => {
-    const token = getToken()
-
     const formattedData = {
       ...data,
       hostname: data.hostname.trim(),
@@ -137,17 +124,10 @@ export default function DHCPandDNS(): JSX.Element {
     const res = await apiFetch('/api/lan/static-leases-config', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {})
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify(formattedData)
     })
-
-    if (res.status === 401) {
-      sessionStorage.removeItem('isLoggedIn')
-      sessionStorage.removeItem('token')
-      throw new Error('Unauthorized')
-    }
 
     if (!res.ok) {
       const txt = await res.text().catch(() => '')
@@ -156,21 +136,12 @@ export default function DHCPandDNS(): JSX.Element {
   }, [])
 
   const deleteLease = useCallback(async (section: string) => {
-    const token = getToken()
-
     const res = await apiFetch(
       `/api/lan/static-leases-config?section=${encodeURIComponent(section)}`,
       {
-        method: 'DELETE',
-        headers: token ? { Authorization: `Bearer ${token}` } : {}
+        method: 'DELETE'
       }
     )
-
-    if (res.status === 401) {
-      sessionStorage.removeItem('isLoggedIn')
-      sessionStorage.removeItem('token')
-      throw new Error('Unauthorized')
-    }
 
     if (!res.ok) {
       const txt = await res.text().catch(() => '')

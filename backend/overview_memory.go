@@ -53,15 +53,7 @@ func getMemoryViaUbus(r *http.Request) (MemoryInfo, error) {
 			sid = auth[7:]
 		}
 		if sid == "" {
-			user := envOr("RPC_USER", "root")
-			pass := envOr("RPC_PASS", "")
-			var extra map[string]any
-			var err error
-			sid, extra, err = ubusLoginLocal(user, pass)
-			_ = extra
-			if err != nil || sid == "" {
-				return MemoryInfo{}, fmt.Errorf("ubus login failed: %v", err)
-			}
+			return MemoryInfo{}, fmt.Errorf("unauthorized: missing session token")
 		}
 
 		// 2) 调用本机 ubus: system.info
@@ -74,9 +66,8 @@ func getMemoryViaUbus(r *http.Request) (MemoryInfo, error) {
 
 	// -------- 远程子模块 ----------
 	// 匿名零 SID（要求子板 rpcd 放开 unauthenticated 的 system.info）
-	const zeroSID = "00000000000000000000000000000000"
 
-	info, err := ubusCallJSONAt(ip, zeroSID, "system", "info", nil)
+	info, err := ubusCallJSONAt(ip, AnonSID, "system", "info", nil)
 	if err != nil {
 		return MemoryInfo{}, fmt.Errorf("remote info failed (%s): %v", ip, err)
 	}

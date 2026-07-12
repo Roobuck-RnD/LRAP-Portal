@@ -30,6 +30,7 @@ import ProtectedRoute from './Pages/Loginpages/ProtectedRoute'
 import Login from './Pages/Loginpages/Login'
 import Layout from './components/Layout'
 import { Toaster } from './components/ui/sonner'
+import { ConfirmHost } from './components/ui/confirm'
 
 function App() {
   return (
@@ -74,6 +75,7 @@ function App() {
         </Route>
       </Routes>
       <Toaster position="top-right" richColors />
+      <ConfirmHost />
     </HashRouter>
   )
 }

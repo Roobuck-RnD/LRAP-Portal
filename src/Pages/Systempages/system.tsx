@@ -1,5 +1,6 @@
 import type { JSX } from 'react'
 import { useEffect, useMemo, useState } from 'react'
+import { toast } from 'sonner'
 import { useCurrentAllModuleStore } from '@/states/allModuleState'
 import { apiFetch } from '@/utils/http'
 
@@ -64,22 +65,13 @@ function SystemSettings(): JSX.Element {
       setError(null)
     }
 
-    const token = sessionStorage.getItem('token')?.trim() || ''
-
     try {
       const res = await apiFetch('/api/system/general', {
         method: 'GET',
         headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
+          'Content-Type': 'application/json'
         }
       })
-
-      if (res.status === 401) {
-        sessionStorage.removeItem('isLoggedIn')
-        sessionStorage.removeItem('token')
-        return
-      }
 
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`)
@@ -100,11 +92,7 @@ function SystemSettings(): JSX.Element {
 
   const fetchTimezones = async () => {
     try {
-      const token = sessionStorage.getItem('token')?.trim() || ''
-
-      const res = await apiFetch('/api/system/timezones', {
-        headers: token ? { Authorization: `Bearer ${token}` } : {}
-      })
+      const res = await apiFetch('/api/system/timezones')
 
       if (res.ok) {
         const list = (await res.json()) as TimezoneOption[]
@@ -135,26 +123,17 @@ function SystemSettings(): JSX.Element {
     setWarnings([])
     setSyncedModules(null)
 
-    const token = sessionStorage.getItem('token')?.trim() || ''
-
     try {
       const res = await apiFetch('/api/system/general', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           hostname: config.hostname,
           timezone: config.timezone
         })
       })
-
-      if (res.status === 401) {
-        sessionStorage.removeItem('isLoggedIn')
-        sessionStorage.removeItem('token')
-        return
-      }
 
       if (!res.ok) {
         const text = await res.text().catch(() => '')
@@ -169,14 +148,14 @@ function SystemSettings(): JSX.Element {
       await fetchData()
 
       if (result?.warnings && result.warnings.length > 0) {
-        alert('Saved, but some AP modules could not be synced. See warnings on the page.')
+        toast.success('Saved, but some AP modules could not be synced. See warnings on the page.')
       } else {
-        alert('Saved successfully. Timezone has been synced to online AP modules.')
+        toast.success('Saved successfully. Timezone has been synced to online AP modules.')
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       setError(msg)
-      alert(`Error: ${msg}`)
+      toast.error('Error', { description: msg })
     } finally {
       setSaving(false)
     }

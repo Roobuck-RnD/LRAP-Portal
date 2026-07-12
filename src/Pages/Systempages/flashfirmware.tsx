@@ -14,8 +14,10 @@ import {
   PackageCheck,
   Power,
 } from "lucide-react";
+import { toast } from "sonner";
 import { useCurrentAllModuleStore } from "@/states/allModuleState";
 import { apiFetch } from "@/utils/http";
+import { confirmDialog } from "@/components/ui/confirm";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -281,8 +283,6 @@ export default function FlashFirmware(): JSX.Element {
     return results.filter((result) => !shouldHideResult(result, results));
   }, [results]);
 
-  const getToken = () => sessionStorage.getItem("token")?.trim() || "";
-
   const startACRebootCountdown = () => {
     setAcRebootCountdown((current) => current ?? AC_UPGRADE_REBOOT_DELAY);
     setMessage(
@@ -324,8 +324,6 @@ export default function FlashFirmware(): JSX.Element {
     keepCurrentSettings: boolean,
     targetIPs: string[],
   ) => {
-    const token = getToken();
-
     const formData = new FormData();
     formData.append("target_type", "bundle");
     formData.append("keep_settings", keepCurrentSettings ? "1" : "0");
@@ -334,15 +332,8 @@ export default function FlashFirmware(): JSX.Element {
 
     const res = await apiFetch("/api/system/firmware/flash", {
       method: "POST",
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
       body: formData,
     });
-
-    if (res.status === 401) {
-      sessionStorage.removeItem("isLoggedIn");
-      sessionStorage.removeItem("token");
-      throw new Error("Unauthorized");
-    }
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");
@@ -353,21 +344,12 @@ export default function FlashFirmware(): JSX.Element {
   };
 
   const fetchFirmwareJob = async (jobID: string) => {
-    const token = getToken();
-
     const res = await apiFetch(
       `/api/system/firmware/flash?job_id=${encodeURIComponent(jobID)}`,
       {
         method: "GET",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
       },
     );
-
-    if (res.status === 401) {
-      sessionStorage.removeItem("isLoggedIn");
-      sessionStorage.removeItem("token");
-      throw new Error("Unauthorized");
-    }
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");
@@ -379,7 +361,7 @@ export default function FlashFirmware(): JSX.Element {
 
   const handleFlashBundle = async () => {
     if (!bundleFile) {
-      alert("Please select an LRAP firmware package.");
+      toast.error("Please select an LRAP firmware package.");
       return;
     }
 
@@ -390,7 +372,11 @@ export default function FlashFirmware(): JSX.Element {
             .join("\n")
         : "No APs detected by the UI. The backend will fall back to 10.10.18.2-10.10.18.5.";
 
-    const ok = confirm(
+    const ok = await confirmDialog({
+      title: "Flash firmware?",
+      destructive: true,
+      confirmText: "Flash",
+      description:
       `Flash LRAP firmware package?\n\n` +
         `Package: ${bundleFile.name}\n` +
         `Size: ${formatFileSize(bundleFile.size)}\n` +
@@ -404,7 +390,7 @@ export default function FlashFirmware(): JSX.Element {
         `Target APs:\n${apText}\n\n` +
         `${keepSettings ? "" : "WARNING: Current AC/AP settings will be erased.\n\n"}` +
         `The upgrade can take several minutes. Do not close this page until the AC upgrade starts.`,
-    );
+    });
 
     if (!ok) return;
 

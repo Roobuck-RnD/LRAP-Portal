@@ -103,6 +103,93 @@ func applyLocalUciLeaseChange(sid string, action func(currentSid string) error) 
 	return nil
 }
 
+// ---------- Shared static-lease service (used by both /api/lan/static-lease*
+// and /api/lan/static-leases-config so the UCI + reload logic lives once) ----------
+
+// staticLeaseUpsert adds or updates the dhcp host reservation matched by MAC.
+// Returns the affected section and whether it was an update (vs a fresh add).
+func staticLeaseUpsert(sid, mac, ip, name string) (string, bool, error) {
+	existing, err := getUciStaticLeasesLocal(sid)
+	if err != nil {
+		return "", false, err
+	}
+
+	targetSection := ""
+	for _, lease := range existing {
+		if strings.EqualFold(lease.MAC, mac) {
+			targetSection = lease.Section
+			break
+		}
+	}
+	updated := targetSection != ""
+
+	resultSection := targetSection
+	err = applyLocalUciLeaseChange(sid, func(currSid string) error {
+		values := map[string]string{"mac": mac, "ip": ip}
+		if name != "" {
+			values["name"] = name
+		}
+
+		if targetSection != "" {
+			_, callErr := ubusCallJSONLocal(currSid, "uci", "set", map[string]any{
+				"config":  "dhcp",
+				"section": targetSection,
+				"values":  values,
+			})
+			return callErr
+		}
+
+		res, callErr := ubusCallJSONLocal(currSid, "uci", "add", map[string]any{
+			"config": "dhcp",
+			"type":   "host",
+			"values": values,
+		})
+		if callErr != nil {
+			return callErr
+		}
+		resultSection, _ = res["section"].(string)
+		return nil
+	})
+	if err != nil {
+		return "", updated, err
+	}
+	return resultSection, updated, nil
+}
+
+// staticLeaseDeleteByMAC removes the dhcp host reservation matched by MAC.
+// Returns the removed section and whether anything was removed.
+func staticLeaseDeleteByMAC(sid, mac string) (string, bool, error) {
+	existing, err := getUciStaticLeasesLocal(sid)
+	if err != nil {
+		return "", false, err
+	}
+	targetSection := ""
+	for _, lease := range existing {
+		if strings.EqualFold(lease.MAC, mac) {
+			targetSection = lease.Section
+			break
+		}
+	}
+	if targetSection == "" {
+		return "", false, nil
+	}
+	if err := staticLeaseDeleteBySection(sid, targetSection); err != nil {
+		return "", false, err
+	}
+	return targetSection, true, nil
+}
+
+// staticLeaseDeleteBySection removes the dhcp host reservation by UCI section.
+func staticLeaseDeleteBySection(sid, section string) error {
+	return applyLocalUciLeaseChange(sid, func(currSid string) error {
+		_, callErr := ubusCallJSONLocal(currSid, "uci", "delete", map[string]any{
+			"config":  "dhcp",
+			"section": section,
+		})
+		return callErr
+	})
+}
+
 // ---------- HTTP Handler: AC-only ----------
 
 func staticLeaseConfigHandler(w http.ResponseWriter, r *http.Request) {
@@ -137,44 +224,7 @@ func staticLeaseConfigHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		existingLeases, _ := getUciStaticLeasesLocal(sid)
-
-		targetSection := ""
-		for _, lease := range existingLeases {
-			if strings.EqualFold(lease.MAC, req.MAC) {
-				targetSection = lease.Section
-				break
-			}
-		}
-
-		err := applyLocalUciLeaseChange(sid, func(currSid string) error {
-			values := map[string]string{
-				"mac": req.MAC,
-				"ip":  req.IPAddr,
-			}
-
-			if req.Hostname != "" {
-				values["name"] = req.Hostname
-			}
-
-			if targetSection != "" {
-				_, callErr := ubusCallJSONLocal(currSid, "uci", "set", map[string]any{
-					"config":  "dhcp",
-					"section": targetSection,
-					"values":  values,
-				})
-				return callErr
-			}
-
-			_, callErr := ubusCallJSONLocal(currSid, "uci", "add", map[string]any{
-				"config": "dhcp",
-				"type":   "host",
-				"values": values,
-			})
-			return callErr
-		})
-
-		if err != nil {
+		if _, _, err := staticLeaseUpsert(sid, req.MAC, req.IPAddr, req.Hostname); err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":"save failed: %v"}`, err), http.StatusInternalServerError)
 			return
 		}
@@ -188,15 +238,7 @@ func staticLeaseConfigHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		err := applyLocalUciLeaseChange(sid, func(currSid string) error {
-			_, callErr := ubusCallJSONLocal(currSid, "uci", "delete", map[string]any{
-				"config":  "dhcp",
-				"section": section,
-			})
-			return callErr
-		})
-
-		if err != nil {
+		if err := staticLeaseDeleteBySection(sid, section); err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":"delete failed: %v"}`, err), http.StatusInternalServerError)
 			return
 		}

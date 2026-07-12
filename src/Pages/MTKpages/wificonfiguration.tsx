@@ -2,11 +2,12 @@ import type { JSX } from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import { useCurrentAllModuleStore } from '@/states/allModuleState'
 import { apiFetch } from '@/utils/http'
+import { confirmDialog } from '@/components/ui/confirm'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Wifi, Save, AlertCircle, CheckCircle2, RadioTower, Settings2, Power } from 'lucide-react'
+import { Wifi, Save, AlertCircle, CheckCircle2, RadioTower, Settings2, Power, Eye, EyeOff } from 'lucide-react'
 
 // ---------- Types ----------
 
@@ -241,6 +242,8 @@ export default function WiFiConfiguration(): JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [syncResults, setSyncResults] = useState<WifiSyncTargetResult[]>([])
+  const [show2g, setShow2g] = useState(false)
+  const [show5g, setShow5g] = useState(false)
 
   const moduleNameByIP = useMemo(() => {
     const map = new Map<string, string>()
@@ -267,20 +270,9 @@ export default function WiFiConfiguration(): JSX.Element {
     }
 
     try {
-      const token = sessionStorage.getItem('token') || ''
-
       const res = await apiFetch('/api/mtk/wifi', {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
+        method: 'GET'
       })
-
-      if (res.status === 401) {
-        sessionStorage.removeItem('isLoggedIn')
-        sessionStorage.removeItem('token')
-        throw new Error('Unauthorized')
-      }
 
       if (!res.ok) {
         const text = await res.text().catch(() => '')
@@ -390,13 +382,10 @@ export default function WiFiConfiguration(): JSX.Element {
     setSyncResults([])
 
     try {
-      const token = sessionStorage.getItem('token') || ''
-
       const res = await apiFetch('/api/mtk/wifi', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           action: 'radio_state',
@@ -407,12 +396,6 @@ export default function WiFiConfiguration(): JSX.Element {
           enabled: nextEnabled
         })
       })
-
-      if (res.status === 401) {
-        sessionStorage.removeItem('isLoggedIn')
-        sessionStorage.removeItem('token')
-        throw new Error('Unauthorized')
-      }
 
       const text = await res.text()
 
@@ -490,9 +473,12 @@ export default function WiFiConfiguration(): JSX.Element {
       return
     }
 
-    const ok = window.confirm(
-      'This will apply 2.4GHz/5GHz SSID/password to all reachable modules, and apply each module radio settings individually. WiFi interfaces will restart. Continue?'
-    )
+    const ok = await confirmDialog({
+      title: 'Apply WiFi settings?',
+      description:
+        'This will apply 2.4GHz/5GHz SSID/password to all reachable modules, and apply each module radio settings individually. WiFi interfaces will restart. Continue?',
+      confirmText: 'Apply'
+    })
 
     if (!ok) return
 
@@ -502,8 +488,6 @@ export default function WiFiConfiguration(): JSX.Element {
     setSyncResults([])
 
     try {
-      const token = sessionStorage.getItem('token') || ''
-
       const payload: WifiConfig = {
         ssid_2g: config.ssid_2g.trim(),
         pass_2g: config.pass_2g,
@@ -533,17 +517,10 @@ export default function WiFiConfiguration(): JSX.Element {
       const res = await apiFetch('/api/mtk/wifi', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify(payload)
       })
-
-      if (res.status === 401) {
-        sessionStorage.removeItem('isLoggedIn')
-        sessionStorage.removeItem('token')
-        throw new Error('Unauthorized')
-      }
 
       const text = await res.text()
 
@@ -652,17 +629,29 @@ export default function WiFiConfiguration(): JSX.Element {
 
                     <div className="grid gap-2">
                       <Label>Password</Label>
-                      <Input
-                        type="text"
-                        value={config.pass_2g}
-                        disabled={saving}
-                        onChange={(e) =>
-                          setConfig((prev) => ({
-                            ...prev,
-                            pass_2g: e.target.value
-                          }))
-                        }
-                      />
+                      <div className="relative">
+                        <Input
+                          type={show2g ? 'text' : 'password'}
+                          className="pr-10"
+                          value={config.pass_2g}
+                          disabled={saving}
+                          onChange={(e) =>
+                            setConfig((prev) => ({
+                              ...prev,
+                              pass_2g: e.target.value
+                            }))
+                          }
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShow2g((v) => !v)}
+                          className="absolute inset-y-0 right-0 flex items-center px-3 text-gray-500 hover:text-gray-700"
+                          aria-label={show2g ? 'Hide password' : 'Show password'}
+                          tabIndex={-1}
+                        >
+                          {show2g ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -687,17 +676,29 @@ export default function WiFiConfiguration(): JSX.Element {
 
                     <div className="grid gap-2">
                       <Label>Password</Label>
-                      <Input
-                        type="text"
-                        value={config.pass_5g}
-                        disabled={saving}
-                        onChange={(e) =>
-                          setConfig((prev) => ({
-                            ...prev,
-                            pass_5g: e.target.value
-                          }))
-                        }
-                      />
+                      <div className="relative">
+                        <Input
+                          type={show5g ? 'text' : 'password'}
+                          className="pr-10"
+                          value={config.pass_5g}
+                          disabled={saving}
+                          onChange={(e) =>
+                            setConfig((prev) => ({
+                              ...prev,
+                              pass_5g: e.target.value
+                            }))
+                          }
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShow5g((v) => !v)}
+                          className="absolute inset-y-0 right-0 flex items-center px-3 text-gray-500 hover:text-gray-700"
+                          aria-label={show5g ? 'Hide password' : 'Show password'}
+                          tabIndex={-1}
+                        >
+                          {show5g ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>

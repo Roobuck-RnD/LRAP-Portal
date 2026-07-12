@@ -103,7 +103,7 @@ func ubusLoginLocal(user, pass string) (sid string, extra map[string]any, err er
 	body, _ := json.Marshal(ubusReq{
 		Jsonrpc: "2.0", ID: 1, Method: "call",
 		Params: []any{
-			"00000000000000000000000000000000",
+			AnonSID,
 			"session", "login",
 			map[string]string{"username": user, "password": pass},
 		},
@@ -259,44 +259,48 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/sessions", createSessionHandler)
+
+	// ---- 公开端点（无需登录）----
+	mux.HandleFunc("/api/sessions", createSessionHandler) // 登录
 	mux.HandleFunc("/healthz", healthHandler)
-
-	// overview_* handlers（存在于其他文件）
-	mux.HandleFunc("/api/status/overview/system", systemOverviewHandler)
-	mux.HandleFunc("/api/status/overview/memory", memoryOverviewHandler)
-	mux.HandleFunc("/api/status/overview/network", networkOverviewHandler)
-	mux.HandleFunc("/api/status/connected-clients", connectedClientsHandler)
-
-	// DHCP & 静态租约（存在于其他文件）
-	mux.HandleFunc("/api/lan/leases", lanLeasesHandler)
-	mux.HandleFunc("/api/lan/leases/reset", resetDhcpLeasesHandler)
-	mux.HandleFunc("/api/lan/static-lease", setStaticLeaseHandler)
-	mux.HandleFunc("/api/lan/static-map", staticMapHandler)
-	mux.HandleFunc("/api/lan/clients", lanClientsHandler)
-	// arp
-	mux.HandleFunc("/api/net/arp", arpHandler)
-	mux.HandleFunc("/api/net/routes", routesHandler)
-	//system page
-	mux.HandleFunc("/api/system/general", systemGeneralHandler)
-	mux.HandleFunc("/api/system/timezones", timezonesHandler)
-	// firmware
-	mux.HandleFunc("/api/system/firmware/flash", firmwareFlashHandler)
+	// AP 拉取固件用，靠一次性能力令牌授权，不走会话鉴权
 	mux.HandleFunc("/api/system/firmware/download", firmwareDownloadHandler)
 
-	// 🟢 [新增] 修改密码接口
-	mux.HandleFunc("/api/system/password", changePasswordHandler)
+	// ---- 受保护端点：统一用 withAuth 校验 ubus 会话 ----
+	// overview_* handlers（存在于其他文件）
+	mux.HandleFunc("/api/status/overview/system", withAuth(systemOverviewHandler))
+	mux.HandleFunc("/api/status/overview/memory", withAuth(memoryOverviewHandler))
+	mux.HandleFunc("/api/status/overview/network", withAuth(networkOverviewHandler))
+	mux.HandleFunc("/api/status/connected-clients", withAuth(connectedClientsHandler))
+
+	// DHCP & 静态租约（存在于其他文件）
+	mux.HandleFunc("/api/lan/leases", withAuth(lanLeasesHandler))
+	mux.HandleFunc("/api/lan/leases/reset", withAuth(resetDhcpLeasesHandler))
+	mux.HandleFunc("/api/lan/static-lease", withAuth(setStaticLeaseHandler))
+	mux.HandleFunc("/api/lan/static-map", withAuth(staticMapHandler))
+	mux.HandleFunc("/api/lan/clients", withAuth(lanClientsHandler))
+	// arp
+	mux.HandleFunc("/api/net/arp", withAuth(arpHandler))
+	mux.HandleFunc("/api/net/routes", withAuth(routesHandler))
+	//system page
+	mux.HandleFunc("/api/system/general", withAuth(systemGeneralHandler))
+	mux.HandleFunc("/api/system/timezones", withAuth(timezonesHandler))
+	// firmware
+	mux.HandleFunc("/api/system/firmware/flash", withAuth(firmwareFlashHandler))
+
+	// 修改密码接口
+	mux.HandleFunc("/api/system/password", withAuth(changePasswordHandler))
 	// wifi ssid/password
-	mux.HandleFunc("/api/mtk/wifi", mtkWifiHandler)
+	mux.HandleFunc("/api/mtk/wifi", withAuth(mtkWifiHandler))
 	// reboot
-	mux.HandleFunc("/api/system/reboot", systemRebootHandler)
+	mux.HandleFunc("/api/system/reboot", withAuth(systemRebootHandler))
 	// network/routes
-	mux.HandleFunc("/api/net/static-routes", staticRoutesConfigHandler)
-	mux.HandleFunc("/api/net/interfaces", interfacesHandler)
+	mux.HandleFunc("/api/net/static-routes", withAuth(staticRoutesConfigHandler))
+	mux.HandleFunc("/api/net/interfaces", withAuth(interfacesHandler))
 	// firewall
-	mux.HandleFunc("/api/net/firewall", firewallHandler)
+	mux.HandleFunc("/api/net/firewall", withAuth(firewallHandler))
 	// static leases config
-  mux.HandleFunc("/api/lan/static-leases-config", staticLeaseConfigHandler)
+	mux.HandleFunc("/api/lan/static-leases-config", withAuth(staticLeaseConfigHandler))
 
 	addr := envOr("LISTEN_ADDR", ":9080")
 	cert := os.Getenv("TLS_CERT_FILE")

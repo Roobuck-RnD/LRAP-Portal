@@ -5,7 +5,6 @@ import { useEffect } from 'react'
 import { Bot, Settings2, SquareTerminal, Map, Router } from 'lucide-react'
 import { NavMain } from '@/components/nav-main'
 import { NavUser } from '@/components/nav-user'
-// import { ModuleSwitcher } from '@/components/module-switcher'
 import {
   Sidebar,
   SidebarContent,
@@ -17,7 +16,6 @@ import {
   SidebarMenuButton
 } from '@/components/ui/sidebar'
 import { type Module } from '@/states/moduleState'
-import { useCurrentModuleStore } from '@/states/moduleState'
 import { useCurrentAllModuleStore } from '@/states/allModuleState'
 import { apiFetch } from '@/utils/http'
 
@@ -75,40 +73,15 @@ const data = {
   ]
 }
 
-function filterNavItems(navItems: typeof data.navMain, moduleType?: string) {
-  const hiddenItemsForSubModule = ['Administration']
-  if (moduleType !== 'Main Module') {
-    return navItems.map((group) => {
-      if (!group.items) return group
-      const filteredItems = group.items.filter(
-        (item) => !hiddenItemsForSubModule.includes(item.title)
-      )
-      return { ...group, items: filteredItems }
-    })
-  }
-  return navItems
-}
-
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
-  // const [modules, setModules] = useState<Module[]>([])
-  const { currentModule } = useCurrentModuleStore()
   const { updateCurrentAllModule } = useCurrentAllModuleStore()
 
   useEffect(() => {
     let timer: number | null = null
 
     const fetchModules = async () => {
-      const token = sessionStorage.getItem('token') ?? ''
       try {
-        const res = await apiFetch('/api/lan/clients', {
-          headers: { Authorization: `Bearer ${token}` }
-        })
-        if (res.status === 401) {
-          // 未登录或 token 失效 → 清理并让上层路由去跳转登录
-          sessionStorage.removeItem('isLoggedIn')
-          sessionStorage.removeItem('token')
-          return
-        }
+        const res = await apiFetch('/api/lan/clients')
         if (!res.ok) {
           console.error('Failed to load modules:', res.status, await res.text())
           return
@@ -161,7 +134,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
-        {/* <ModuleSwitcher modules={modules} /> */}
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild>
@@ -178,7 +150,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
-        <NavMain items={filterNavItems(data.navMain, currentModule?.type)} />
+        <NavMain items={data.navMain} />
       </SidebarContent>
       <SidebarFooter>
         <NavUser user={data.user} />

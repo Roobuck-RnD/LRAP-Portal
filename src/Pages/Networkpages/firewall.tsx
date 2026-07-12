@@ -1,7 +1,9 @@
 // src/Pages/Networkpages/firewall.tsx
 import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { toast } from 'sonner'
 import { apiFetch } from '@/utils/http'
+import { confirmDialog } from '@/components/ui/confirm'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -154,8 +156,6 @@ export default function Firewall(): JSX.Element {
   const [formMode, setFormMode] = useState<'create' | 'edit'>('create')
   const [form, setForm] = useState<PortForwardForm>(EMPTY_FORWARD)
 
-  const getToken = () => sessionStorage.getItem('token')?.trim() || ''
-
   const fetchFirewall = useCallback(async (isBackground = false) => {
     if (isBackground) {
       setBackgroundLoading(true)
@@ -166,18 +166,9 @@ export default function Firewall(): JSX.Element {
     setError(null)
 
     try {
-      const token = getToken()
-
       const res = await apiFetch('/api/net/firewall', {
-        method: 'GET',
-        headers: token ? { Authorization: `Bearer ${token}` } : {}
+        method: 'GET'
       })
-
-      if (res.status === 401) {
-        sessionStorage.removeItem('isLoggedIn')
-        sessionStorage.removeItem('token')
-        throw new Error('Unauthorized')
-      }
 
       if (!res.ok) {
         const txt = await res.text().catch(() => '')
@@ -221,22 +212,13 @@ export default function Firewall(): JSX.Element {
   }, [fetchFirewall])
 
   const postAction = async (payload: unknown) => {
-    const token = getToken()
-
     const res = await apiFetch('/api/net/firewall', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {})
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload)
     })
-
-    if (res.status === 401) {
-      sessionStorage.removeItem('isLoggedIn')
-      sessionStorage.removeItem('token')
-      throw new Error('Unauthorized')
-    }
 
     if (!res.ok) {
       const txt = await res.text().catch(() => '')
@@ -285,7 +267,7 @@ export default function Firewall(): JSX.Element {
   }
 
   const saveFirewallSettings = async () => {
-    if (!confirm('Save firewall global settings? Firewall will reload briefly.')) return
+    if (!(await confirmDialog({ title: 'Save firewall settings?', description: 'Save firewall global settings? Firewall will reload briefly.', confirmText: 'Save' }))) return
 
     setSaving(true)
 
@@ -298,7 +280,7 @@ export default function Firewall(): JSX.Element {
 
       await fetchFirewall()
     } catch (err: unknown) {
-      alert(`Error: ${getErrorMessage(err)}`)
+      toast.error('Error', { description: getErrorMessage(err) })
     } finally {
       setSaving(false)
     }
@@ -307,15 +289,18 @@ export default function Firewall(): JSX.Element {
   const saveForward = async () => {
     const validation = validateForwardForm()
     if (validation) {
-      alert(validation)
+      toast.error(validation)
       return
     }
 
-    const ok = confirm(
-      `${formMode === 'create' ? 'Create' : 'Update'} port forward?\n\n` +
+    const ok = await confirmDialog({
+      title: `${formMode === 'create' ? 'Create' : 'Update'} port forward?`,
+      description:
+        `${formMode === 'create' ? 'Create' : 'Update'} port forward?\n\n` +
         `Match: ${form.src_dip || 'any'}:${form.src_dport} (${protoLabel(form.proto)})\n` +
-        `Forward to: ${form.dest_ip}:${form.dest_port}`
-    )
+        `Forward to: ${form.dest_ip}:${form.dest_port}`,
+      confirmText: formMode === 'create' ? 'Create' : 'Update'
+    })
 
     if (!ok) return
 
@@ -339,7 +324,7 @@ export default function Firewall(): JSX.Element {
       setIsFormOpen(false)
       await fetchFirewall()
     } catch (err: unknown) {
-      alert(`Error: ${getErrorMessage(err)}`)
+      toast.error('Error', { description: getErrorMessage(err) })
     } finally {
       setSaving(false)
     }
@@ -357,14 +342,14 @@ export default function Firewall(): JSX.Element {
 
       await fetchFirewall()
     } catch (err: unknown) {
-      alert(`Error: ${getErrorMessage(err)}`)
+      toast.error('Error', { description: getErrorMessage(err) })
     } finally {
       setSaving(false)
     }
   }
 
   const deleteForward = async (item: PortForward) => {
-    if (!confirm(`Delete port forward "${item.name || item.section}"?`)) return
+    if (!(await confirmDialog({ title: 'Delete port forward?', description: `Delete port forward "${item.name || item.section}"?`, destructive: true, confirmText: 'Delete' }))) return
 
     setSaving(true)
 
@@ -376,7 +361,7 @@ export default function Firewall(): JSX.Element {
 
       await fetchFirewall()
     } catch (err: unknown) {
-      alert(`Error: ${getErrorMessage(err)}`)
+      toast.error('Error', { description: getErrorMessage(err) })
     } finally {
       setSaving(false)
     }

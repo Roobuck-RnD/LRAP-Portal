@@ -48,15 +48,7 @@ func getSysInfoViaUbus(r *http.Request) (SysInfo, error) {
 			sid = strings.TrimSpace(auth[7:])
 		}
 		if sid == "" {
-			user := envOr("RPC_USER", "root")
-			pass := envOr("RPC_PASS", "")
-			var extra map[string]any
-			var err error
-			sid, extra, err = ubusLoginLocal(user, pass)
-			_ = extra
-			if err != nil || sid == "" {
-				return SysInfo{}, fmt.Errorf("ubus login failed: %v", err)
-			}
+			return SysInfo{}, fmt.Errorf("unauthorized: missing session token")
 		}
 
 		board, err := ubusCallJSONLocal(sid, "system", "board", nil)
@@ -78,13 +70,12 @@ func getSysInfoViaUbus(r *http.Request) (SysInfo, error) {
 	}
 
 	// 远程子模块（未认证零SID；需在子模块 rpcd 的 unauth 放开 system.board/info/file.read）
-	const zeroSID = "00000000000000000000000000000000"
 
-	board, err := ubusCallJSONAt(ip, zeroSID, "system", "board", nil)
+	board, err := ubusCallJSONAt(ip, AnonSID, "system", "board", nil)
 	if err != nil {
 		return SysInfo{}, fmt.Errorf("remote board failed (%s): %v", ip, err)
 	}
-	info, err := ubusCallJSONAt(ip, zeroSID, "system", "info", nil)
+	info, err := ubusCallJSONAt(ip, AnonSID, "system", "info", nil)
 	if err != nil {
 		return SysInfo{}, fmt.Errorf("remote info failed (%s): %v", ip, err)
 	}
@@ -162,9 +153,8 @@ func readLocalLRAPVersion() string {
 }
 
 func readRemoteLRAPVersion(ip string) string {
-	const zeroSID = "00000000000000000000000000000000"
 
-	res, err := ubusCallJSONAt(ip, zeroSID, "file", "read", map[string]any{
+	res, err := ubusCallJSONAt(ip, AnonSID, "file", "read", map[string]any{
 		"path": lrapVersionPath,
 	})
 	if err != nil {

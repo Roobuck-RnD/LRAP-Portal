@@ -46,3 +46,4 @@ LRAPAssests*/
 /mtk_mactable_probe
 backend/lrapServer
 backend/usr/sbin/
+*.exe
