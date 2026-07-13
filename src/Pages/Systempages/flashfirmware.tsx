@@ -9,8 +9,6 @@ import {
   FileUp,
   FileArchive,
   X,
-  Cpu,
-  Wifi,
   PackageCheck,
   Power,
 } from "lucide-react";
@@ -22,7 +20,6 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -92,13 +89,10 @@ function resultLabel(result: FlashResult): string {
   const stage = result.stage ? ` / ${result.stage}` : "";
 
   if (role === "bundle") return `Package${stage}`;
-  if (role === "sub") return `AP firmware${stage}`;
-  if (role === "main") return `AC firmware${stage}`;
-  if (role === "ac") return `AC firmware${stage}`;
-  if (role === "ap") return `AP firmware${stage}`;
   if (role === "dhcp") return `DHCP leases${stage}`;
 
-  return `${role}${stage}`;
+  // 不区分 AC/AP,统一显示为固件,避免暴露多模块架构
+  return `Firmware${stage}`;
 }
 
 function hasACFlashStarted(items?: FlashResult[]): boolean {
@@ -168,10 +162,6 @@ function FirmwarePicker({
         <label className="block text-sm font-medium text-gray-700">
           LRAP firmware package
         </label>
-        <p className="mt-0.5 text-xs text-gray-500">
-          Upload one LRAP .bin package. It contains both AP/sub firmware and
-          AC/main firmware.
-        </p>
       </div>
 
       <input
@@ -248,14 +238,6 @@ function FirmwarePicker({
 export default function FlashFirmware(): JSX.Element {
   const { currentAllModule } = useCurrentAllModuleStore();
 
-  const acModule = useMemo<Module | undefined>(() => {
-    return (
-      currentAllModule.find((m) => m.type === "Main Module") ||
-      currentAllModule.find((m) => m.port === "br-lan") ||
-      currentAllModule[0]
-    );
-  }, [currentAllModule]);
-
   const apModules = useMemo<Module[]>(() => {
     return currentAllModule
       .filter((m) => m.type !== "Main Module")
@@ -286,7 +268,7 @@ export default function FlashFirmware(): JSX.Element {
   const startACRebootCountdown = () => {
     setAcRebootCountdown((current) => current ?? AC_UPGRADE_REBOOT_DELAY);
     setMessage(
-      "AC firmware upgrade has started. The portal and WiFi may disconnect shortly. Please wait for the countdown to finish, then log in again.",
+      "Firmware upgrade has started. The portal and WiFi may disconnect shortly. Please wait for the countdown to finish, then log in again.",
     );
   };
 
@@ -365,39 +347,23 @@ export default function FlashFirmware(): JSX.Element {
       return;
     }
 
-    const apText =
-      apModules.length > 0
-        ? apModules
-            .map((ap) => `${ap.name || "RoobuckAP"} (${ap.ipaddress})`)
-            .join("\n")
-        : "No APs detected by the UI. The backend will fall back to 10.10.18.2-10.10.18.5.";
-
     const ok = await confirmDialog({
       title: "Flash firmware?",
       destructive: true,
       confirmText: "Flash",
       description:
-      `Flash LRAP firmware package?\n\n` +
+        `Flash LRAP firmware package?\n\n` +
         `Package: ${bundleFile.name}\n` +
         `Size: ${formatFileSize(bundleFile.size)}\n` +
         `Keep current configuration: ${keepSettings ? "Yes" : "No"}\n\n` +
-        `Upgrade order:\n` +
-        `1. Validate and unpack the LRAP package on the AC.\n` +
-        `2. Flash AP/sub firmware first.\n` +
-        `3. Wait for APs to come back with the expected version.\n` +
-        `4. Flash AC/main firmware last.\n\n` +
-        `Target AC:\n${acModule?.name || "Main Module"} ${acModule?.ipaddress || "Local AC"}\n\n` +
-        `Target APs:\n${apText}\n\n` +
-        `${keepSettings ? "" : "WARNING: Current AC/AP settings will be erased.\n\n"}` +
-        `The upgrade can take several minutes. Do not close this page until the AC upgrade starts.`,
+        `${keepSettings ? "" : "WARNING: Current settings will be erased.\n\n"}` +
+        `The upgrade can take several minutes. Do not close this page until it starts.`,
     });
 
     if (!ok) return;
 
     setFlashing(true);
-    setMessage(
-      "Uploading LRAP package. The AC will validate, flash APs first, then flash itself.",
-    );
+    setMessage("Uploading firmware package. The upgrade will start shortly.");
     setResults([]);
 
     try {
@@ -450,8 +416,8 @@ export default function FlashFirmware(): JSX.Element {
           setMessage(
             data.message ||
               (data.ok
-                ? "LRAP firmware upgrade has started. The AC will reboot shortly."
-                : "LRAP firmware upgrade did not complete."),
+                ? "Firmware upgrade has started. The device will reboot shortly."
+                : "Firmware upgrade did not complete."),
           );
         }
       }
@@ -502,16 +468,16 @@ export default function FlashFirmware(): JSX.Element {
             </div>
 
             <h3 className="mb-2 text-2xl font-bold text-gray-900">
-              AC Upgrade Started
+              Upgrade Started
             </h3>
 
             <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 p-4 text-left">
               <div className="flex items-start gap-2 text-sm text-blue-800">
                 <AlertTriangle className="h-5 w-5 shrink-0" />
                 <p>
-                  The AC firmware upgrade is in progress. The portal and WiFi
-                  may disconnect shortly. This is normal. Do not power off the
-                  AC or AP modules.
+                  The firmware upgrade is in progress. The portal and WiFi may
+                  disconnect shortly. This is normal. Do not power off the
+                  device.
                 </p>
               </div>
             </div>
@@ -532,24 +498,8 @@ export default function FlashFirmware(): JSX.Element {
         <div className="mb-8">
           <h2 className="text-3xl font-bold text-gray-900">Firmware Upgrade</h2>
           <p className="mt-1 text-gray-500">
-            Upload one LRAP firmware package. The system upgrades AP modules
-            first, clears AP DHCP leases, then upgrades AC last.
+            Upload one firmware package to update the device.
           </p>
-        </div>
-
-        <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-          <div className="flex gap-2">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            <div>
-              <div className="font-semibold">Important</div>
-              <p className="mt-1">
-                Upload only the combined LRAP package, for example
-                lrap-fw-2026.06.30.bin. This is not a normal OpenWrt sysupgrade
-                image and must be uploaded through this portal, not LuCI
-                firmware flash.
-              </p>
-            </div>
-          </div>
         </div>
 
         {message && (
@@ -564,67 +514,11 @@ export default function FlashFirmware(): JSX.Element {
               <PackageCheck className="h-5 w-5 text-blue-600" />
               <div>
                 <CardTitle>LRAP Firmware Package</CardTitle>
-                <CardDescription>
-                  One upload contains both AP/sub firmware and AC/main firmware.
-                </CardDescription>
               </div>
             </div>
           </CardHeader>
 
           <CardContent className="space-y-6 p-6">
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <div className="rounded border bg-white p-4">
-                <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-900">
-                  <Cpu className="h-4 w-4 text-blue-600" />
-                  AC / Main Module
-                </div>
-                <div className="text-sm text-gray-800">
-                  {acModule?.name || "Main Module"}
-                </div>
-                <div className="font-mono text-xs text-gray-500">
-                  {acModule?.ipaddress || "Local AC"}
-                </div>
-                <div className="mt-2 text-xs text-gray-500">
-                  Flashed last after AP verification.
-                </div>
-              </div>
-
-              <div className="rounded border bg-white p-4">
-                <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-900">
-                  <Wifi className="h-4 w-4 text-purple-600" />
-                  AP / Sub Modules
-                </div>
-
-                {apModules.length === 0 ? (
-                  <div className="text-xs text-amber-700">
-                    No AP modules detected in the UI. Backend fallback targets
-                    10.10.18.2-10.10.18.5.
-                  </div>
-                ) : (
-                  <div className="space-y-1">
-                    {apModules.map((ap) => (
-                      <div
-                        key={ap.ipaddress}
-                        className="flex justify-between gap-3 text-xs"
-                      >
-                        <span className="truncate text-gray-800">
-                          {ap.name || "RoobuckAP"}
-                        </span>
-                        <span className="font-mono text-gray-500">
-                          {ap.ipaddress}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                <div className="mt-2 text-xs text-gray-500">
-                  Flashed first, DHCP leases are cleared, then APs are verified
-                  before AC.
-                </div>
-              </div>
-            </div>
-
             <FirmwarePicker
               file={bundleFile}
               disabled={flashing || acRebootCountdown !== null}
@@ -638,7 +532,7 @@ export default function FlashFirmware(): JSX.Element {
                 onChange={(e) => setKeepSettings(e.target.checked)}
                 disabled={flashing || acRebootCountdown !== null}
               />
-              Keep current configuration on AC and AP modules
+              Keep current configuration
             </label>
 
             <Button
@@ -674,11 +568,11 @@ export default function FlashFirmware(): JSX.Element {
                     >
                       <div className="min-w-0">
                         <div className="font-medium">{resultLabel(result)}</div>
-                        <div className="font-mono text-xs text-gray-500">
-                          {result.ip ||
-                            (result.role === "main" ? "AC" : "Package")}
-                          {result.version ? ` · ${result.version}` : ""}
-                        </div>
+                        {result.version && (
+                          <div className="font-mono text-xs text-gray-500">
+                            {result.version}
+                          </div>
+                        )}
                         {result.detail && (
                           <div className="mt-1 break-words text-xs text-gray-500">
                             {result.detail}

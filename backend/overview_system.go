@@ -88,7 +88,11 @@ func getSysInfoViaUbus(r *http.Request) (SysInfo, error) {
 	}
 
 	customVersion := readRemoteLRAPVersion(ip)
-	return mapToSysInfo(board, info, arch, customVersion), nil
+	sys := mapToSysInfo(board, info, arch, customVersion)
+	// AP 的 System Info 卡显示名也按物理口编号(Antenna1-4),与 Connected Clients / WiFi
+	// 一致;AC(ip=="")走上面的本机分支,保持真实 hostname。端口解析不出时回退真实 hostname。
+	sys.Hostname = apDisplayName(sys.Hostname, apPortIndexByIP()[ip])
+	return sys, nil
 }
 
 func mapToSysInfo(board, info map[string]any, arch string, customFirmwareVersion string) SysInfo {

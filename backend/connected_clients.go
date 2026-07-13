@@ -199,6 +199,9 @@ func ccBuildAPModules(leases map[string]ccDhcpLease, arpByMAC map[string]ccArpEn
 	ips := APManagementIPs()
 	out := make([]ConnectedClientModule, 0, len(ips))
 
+	// 一次性解析 IP->物理口,给 AP 编号(只读,goroutine 里并发读安全)
+	portByIP := apPortIndexByIP()
+
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
@@ -215,6 +218,8 @@ func ccBuildAPModules(leases map[string]ccDhcpLease, arpByMAC map[string]ccArpEn
 			}
 
 			mod := ccBuildSingleAPModule(ip, leases, arpByMAC)
+			// 显示名改为按物理口编号(RoobuckAP1..4),稳定不随 IP 变
+			mod.Name = apDisplayName(mod.Name, portByIP[ip])
 
 			mu.Lock()
 			out = append(out, mod)
