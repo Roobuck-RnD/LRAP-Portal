@@ -1081,6 +1081,9 @@ uci commit firewall
 
 func ifaceGetAPManagementList() []APManagementInfo {
 	ips := APManagementIPs()
+	// 按物理口给稳定显示名(Antenna<N>),而不是暴露 AP 真实 hostname。
+	// portByIP 在起 goroutine 前算好,循环里只读。
+	portByIP := apPortIndexByIP()
 	results := make([]APManagementInfo, 0, len(ips))
 
 	var wg sync.WaitGroup
@@ -1088,13 +1091,14 @@ func ifaceGetAPManagementList() []APManagementInfo {
 
 	for _, ip := range ips {
 		ip := ip
+		portN := portByIP[ip]
 
 		wg.Add(1)
 
 		go func() {
 			defer wg.Done()
 
-			info := ifaceGetSingleAPManagement(ip)
+			info := ifaceGetSingleAPManagement(ip, portN)
 
 			mu.Lock()
 			results = append(results, info)
@@ -1109,9 +1113,11 @@ func ifaceGetAPManagementList() []APManagementInfo {
 	return results
 }
 
-func ifaceGetSingleAPManagement(ip string) APManagementInfo {
+func ifaceGetSingleAPManagement(ip string, portIndex int) APManagementInfo {
+	// portIndex>0 时 apDisplayName 直接返回 Antenna<N>(忽略 hostname 参数);
+	// 解析不出口时才回退到括号里的名字(离线用 "AP "+ip,在线用真实 hostname)。
 	info := APManagementInfo{
-		Name:   "AP " + ip,
+		Name:   apDisplayName("AP "+ip, portIndex),
 		IP:     ip,
 		Online: false,
 	}
@@ -1124,7 +1130,7 @@ func ifaceGetSingleAPManagement(ip string) APManagementInfo {
 	info.Online = true
 
 	if hostname := ifaceRemoteHostname(ip); hostname != "" {
-		info.Name = hostname
+		info.Name = apDisplayName(hostname, portIndex)
 	}
 
 	values, err := ifaceRemoteUCISection(ip, "network", "lan")

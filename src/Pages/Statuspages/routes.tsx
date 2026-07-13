@@ -2,7 +2,7 @@ import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useCurrentAllModuleStore } from '@/states/allModuleState'
 import { apiFetch } from '@/utils/http'
-import { RefreshCw, Network, Route, Search, Info } from 'lucide-react'
+import { RefreshCw, Network, Route, Search } from 'lucide-react'
 
 // ---------- Types ----------
 
@@ -144,7 +144,7 @@ function RoutesStatus(): JSX.Element {
           <div>
             <h2 className="text-3xl font-bold text-gray-900">Network Routes & ARP</h2>
             <p className="mt-1 text-sm text-gray-500">
-              Live AC gateway view of ARP entries and active IPv4 routes.
+              Live gateway view of ARP entries and active IPv4 routes.
             </p>
           </div>
 
@@ -158,27 +158,14 @@ function RoutesStatus(): JSX.Element {
           </button>
         </div>
 
-        <div className="mb-6 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-800">
-          <div className="flex gap-2">
-            <Info className="mt-0.5 h-4 w-4 shrink-0" />
-            <div>
-              <div className="font-semibold">AC-only network status</div>
-              <p className="mt-1">
-                AP modules are pure bridge APs. ARP and routing status are shown from the AC main
-                controller because client traffic uses the AC as the default gateway.
-              </p>
-            </div>
-          </div>
-        </div>
-
         <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div className="rounded-xl border bg-white p-4 shadow-sm">
             <div className="text-sm text-gray-500">Gateway Device</div>
             <div className="mt-2 text-xl font-bold text-gray-900">
-              {acModule?.name || 'Main Module'}
+              {acModule?.name || 'Router'}
             </div>
             <div className="mt-1 font-mono text-xs text-gray-500">
-              {acModule?.ipaddress || 'Local AC'}
+              {acModule?.ipaddress || ''}
             </div>
           </div>
 
@@ -195,13 +182,13 @@ function RoutesStatus(): JSX.Element {
 
         {error && (
           <div className="mb-6 rounded border border-red-100 bg-red-50 p-3 text-sm text-red-600">
-            Failed to retrieve AC network status: {error}
+            Failed to retrieve network status: {error}
           </div>
         )}
 
         {loading && arp.length === 0 && routes.length === 0 ? (
           <div className="flex h-40 items-center justify-center rounded-xl border bg-white text-gray-500 shadow-sm">
-            Loading AC network status...
+            Loading network status...
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-6">
@@ -213,7 +200,7 @@ function RoutesStatus(): JSX.Element {
                   <div>
                     <h3 className="text-lg font-semibold text-gray-800">ARP Table</h3>
                     <div className="text-xs text-gray-500">
-                      IP-to-MAC neighbor entries learned by the AC gateway.
+                      IP-to-MAC neighbor entries learned by the gateway.
                     </div>
                   </div>
                 </div>
@@ -272,7 +259,7 @@ function RoutesStatus(): JSX.Element {
                   <div>
                     <h3 className="text-lg font-semibold text-gray-800">Main IPv4 Routes</h3>
                     <div className="text-xs text-gray-500">
-                      Active main routing table on the AC. Local kernel routes are hidden.
+                      Active main routing table. Local kernel routes are hidden.
                     </div>
                   </div>
                 </div>

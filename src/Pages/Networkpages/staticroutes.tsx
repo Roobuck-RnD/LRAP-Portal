@@ -2,7 +2,7 @@ import type { JSX } from 'react'
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useCurrentAllModuleStore } from '@/states/allModuleState'
 import { apiFetch } from '@/utils/http'
-import { Trash2, Plus, RefreshCw, Save, Route, Search, Info } from 'lucide-react'
+import { Trash2, Plus, RefreshCw, Save, Route, Search } from 'lucide-react'
 
 import {
   AlertDialog,
@@ -251,7 +251,7 @@ export default function StaticRoutes(): JSX.Element {
         setForm(INITIAL_FORM)
 
         toast.info('Applying Configuration', {
-          description: 'Static route saved on AC. Reloading network...'
+          description: 'Static route saved. Reloading network...'
         })
       } else {
         if (!section) throw new Error('Missing route section.')
@@ -259,7 +259,7 @@ export default function StaticRoutes(): JSX.Element {
         await deleteRoute(section)
 
         toast.info('Applying Configuration', {
-          description: 'Static route deleted from AC. Reloading network...'
+          description: 'Static route deleted. Reloading network...'
         })
       }
 
@@ -286,7 +286,7 @@ export default function StaticRoutes(): JSX.Element {
       setError(undefined)
 
       toast.success('Success', {
-        description: `Static route successfully ${type === 'add' ? 'added' : 'deleted'} on AC.`
+        description: `Static route successfully ${type === 'add' ? 'added' : 'deleted'}.`
       })
     } catch (err: unknown) {
       const msg = getErrorMessage(err)
@@ -294,7 +294,7 @@ export default function StaticRoutes(): JSX.Element {
 
       if (msg.includes('timeout') || msg.includes('Failed to fetch')) {
         toast.warning('Connection Lost', {
-          description: 'Configuration may have applied, but the AC connection was temporarily lost.'
+          description: 'Configuration may have applied, but the connection was temporarily lost.'
         })
       } else {
         toast.error('Operation Failed', {
@@ -314,7 +314,7 @@ export default function StaticRoutes(): JSX.Element {
           <div>
             <h2 className="text-3xl font-bold text-gray-900">Static IPv4 Routes</h2>
             <p className="mt-1 text-sm text-gray-500">
-              Configure persistent routing rules on the AC main controller.
+              Configure persistent routing rules.
             </p>
           </div>
 
@@ -328,27 +328,14 @@ export default function StaticRoutes(): JSX.Element {
           </button>
         </div>
 
-        <div className="mb-6 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-800">
-          <div className="flex gap-2">
-            <Info className="mt-0.5 h-4 w-4 shrink-0" />
-            <div>
-              <div className="font-semibold">AC-only routing</div>
-              <p className="mt-1">
-                AP modules are running in pure bridge AP mode. Client traffic uses the AC as the
-                default gateway, so static routes should be configured on the AC only.
-              </p>
-            </div>
-          </div>
-        </div>
-
         <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div className="rounded-xl border bg-white p-4 shadow-sm">
             <div className="text-sm text-gray-500">DHCP / Gateway Device</div>
             <div className="mt-2 text-xl font-bold text-gray-900">
-              {acModule?.name || 'Main Module'}
+              {acModule?.name || 'Router'}
             </div>
             <div className="mt-1 font-mono text-xs text-gray-500">
-              {acModule?.ipaddress || 'Local AC'}
+              {acModule?.ipaddress || ''}
             </div>
           </div>
 
@@ -379,10 +366,10 @@ export default function StaticRoutes(): JSX.Element {
               <Route className="h-5 w-5 text-blue-600" />
               <div>
                 <h3 className="text-lg font-semibold text-gray-800">
-                  {acModule?.name || 'Main Controller'}
+                  {acModule?.name || 'Router'}
                 </h3>
                 <div className="font-mono text-xs text-gray-500">
-                  {acModule?.ipaddress || 'AC Static Routes'}
+                  {acModule?.ipaddress || 'Static Routes'}
                 </div>
               </div>
             </div>
@@ -545,8 +532,8 @@ export default function StaticRoutes(): JSX.Element {
 
             <AlertDialogDescription>
               {actionConfirm.type === 'add'
-                ? 'This will apply the static route to the AC main controller. The network service will reload briefly.'
-                : 'Are you sure you want to remove this static route from the AC main controller? The network service will reload briefly.'}
+                ? 'This will apply the static route. The network service will reload briefly.'
+                : 'Are you sure you want to remove this static route? The network service will reload briefly.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
 
@@ -570,7 +557,7 @@ export default function StaticRoutes(): JSX.Element {
             <RefreshCw className="mb-6 h-12 w-12 animate-spin text-blue-600" />
             <h3 className="text-xl font-bold text-gray-800">Applying Configuration</h3>
             <p className="mt-3 text-center text-sm leading-relaxed text-gray-500">
-              Reloading AC network service.
+              Reloading network service.
               <br />
               Please wait while we reconnect...
             </p>
