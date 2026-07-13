@@ -277,6 +277,9 @@ func getMtkWifiLogic() (MtkWifiInfo, error) {
 
 	apIPs := APManagementIPs()
 
+	// 一次性解析 IP->物理口,给 AP 编号(只读,goroutine 里并发读安全)
+	portByIP := apPortIndexByIP()
+
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
@@ -296,6 +299,8 @@ func getMtkWifiLogic() (MtkWifiInfo, error) {
 			if name == "" {
 				name = "RoobuckAP"
 			}
+			// 显示名改为按物理口编号(RoobuckAP1..4),稳定不随 IP 变
+			name = apDisplayName(name, portByIP[ip])
 
 			dat24 := defaultMtkDatConfig(mtkBand24G)
 			dat5 := defaultMtkDatConfig(mtkBand5G)

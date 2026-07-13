@@ -319,12 +319,14 @@ func lanClientsHandler(w http.ResponseWriter, r *http.Request) {
 		if port == "" {
 			port = "unknown"
 		}
+		portN := lanPortNumber(port)
 
 		client := LanClient{
 			Port:     port,
 			MAC:      mac,
 			IP:       ip,
-			Hostname: "RoobuckAP",
+			// 显示名按物理口编号(RoobuckAP1..4),稳定不随 IP 变;设备真实 hostname 不改。
+			Hostname: apDisplayName("RoobuckAP", portN),
 			Type:     "ap",
 			Online:   true,
 		}
@@ -332,9 +334,9 @@ func lanClientsHandler(w http.ResponseWriter, r *http.Request) {
 		idx := len(finalOut)
 		finalOut = append(finalOut, client)
 
-		// 并发读取真实 hostname
+		// 并发读取真实 hostname,再按物理口编号
 		wg.Add(1)
-		go func(targetIdx int, targetIP string) {
+		go func(targetIdx, pN int, targetIP string) {
 			defer wg.Done()
 
 			realName := resolveRemoteHostname(targetIP)
@@ -343,9 +345,9 @@ func lanClientsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 
 			mu.Lock()
-			finalOut[targetIdx].Hostname = realName
+			finalOut[targetIdx].Hostname = apDisplayName(realName, pN)
 			mu.Unlock()
-		}(idx, ip)
+		}(idx, portN, ip)
 	}
 
 	wg.Wait()

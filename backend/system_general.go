@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
@@ -218,6 +220,10 @@ func setSystemGeneral(r *http.Request, req SystemConfigReq) (SystemConfigSaveRes
 
 	notifySystemConfigChangeLocal(sid)
 
+	// uci commit 不会把 hostname 应用到运行系统,必须让 system init 重载才会写入
+	// 内核运行时 hostname(否则新名字要等重启才生效,UI 读的正是运行时 hostname)。
+	applyLocalHostname()
+
 	// 2. APs: sync timezone only, keep AP hostnames unchanged
 	apIPs := APManagementIPs()
 	warnings := make([]string, 0)
@@ -299,6 +305,15 @@ func notifySystemConfigChangeRemote(ip string, sid string) {
 			"package": "system",
 		},
 	})
+}
+
+// applyLocalHostname 把已提交的 hostname 应用到运行中的系统。`/etc/init.d/system
+// reload` 会从 UCI 重新应用 hostname(及相关 /proc/sys 设置);仅 uci commit 不会,
+// 那样新 hostname 要等重启才生效。fire-and-forget:失败只记日志,不影响保存结果。
+func applyLocalHostname() {
+	if out, err := exec.Command("/etc/init.d/system", "reload").CombinedOutput(); err != nil {
+		log.Printf("applyLocalHostname: /etc/init.d/system reload failed: %v, output: %s", err, string(out))
+	}
 }
 
 // ---------- Timezones Handler ----------
