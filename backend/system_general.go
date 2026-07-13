@@ -209,13 +209,13 @@ func setSystemGeneral(r *http.Request, req SystemConfigReq) (SystemConfigSaveRes
 		"section": "@system[0]",
 		"values":  acValues,
 	}); err != nil {
-		return SystemConfigSaveResp{}, fmt.Errorf("AC uci set failed: %v", err)
+		return SystemConfigSaveResp{}, fmt.Errorf("uci set failed: %v", err)
 	}
 
 	if _, err := ubusCallJSONLocal(sid, "uci", "commit", map[string]any{
 		"config": "system",
 	}); err != nil {
-		return SystemConfigSaveResp{}, fmt.Errorf("AC uci commit failed: %v", err)
+		return SystemConfigSaveResp{}, fmt.Errorf("uci commit failed: %v", err)
 	}
 
 	notifySystemConfigChangeLocal(sid)
@@ -224,8 +224,11 @@ func setSystemGeneral(r *http.Request, req SystemConfigReq) (SystemConfigSaveRes
 	// 内核运行时 hostname(否则新名字要等重启才生效,UI 读的正是运行时 hostname)。
 	applyLocalHostname()
 
-	// 2. APs: sync timezone only, keep AP hostnames unchanged
+	// 2. APs: sync timezone only, keep AP hostnames unchanged.
+	// 面向用户的 warning 用按口编号的显示名(Antenna<N>),不暴露 AP 的 IP/多模块架构;
+	// 带 IP 的详细错误只写服务端日志。portByIP 在起 goroutine 前算好,循环里只读。
 	apIPs := APManagementIPs()
+	portByIP := apPortIndexByIP()
 	warnings := make([]string, 0)
 	synced := 0
 
@@ -241,8 +244,10 @@ func setSystemGeneral(r *http.Request, req SystemConfigReq) (SystemConfigSaveRes
 			defer wg.Done()
 
 			if err := syncTimezoneToAP(targetIP, zonename, timezonePosix); err != nil {
+				name := apDisplayName("Antenna", portByIP[targetIP])
+				log.Printf("timezone sync failed for %s (%s): %v", name, targetIP, err)
 				mu.Lock()
-				warnings = append(warnings, fmt.Sprintf("%s: %v", targetIP, err))
+				warnings = append(warnings, fmt.Sprintf("%s: could not apply timezone", name))
 				mu.Unlock()
 				return
 			}
@@ -257,7 +262,7 @@ func setSystemGeneral(r *http.Request, req SystemConfigReq) (SystemConfigSaveRes
 
 	return SystemConfigSaveResp{
 		Status:        "ok",
-		Message:       "AC saved and timezone sync attempted for AP modules",
+		Message:       "System settings saved",
 		SyncedModules: synced,
 		Warnings:      warnings,
 	}, nil

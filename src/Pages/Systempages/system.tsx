@@ -46,7 +46,6 @@ function SystemSettings(): JSX.Element {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
-  const [syncedModules, setSyncedModules] = useState<number | null>(null)
 
   const acModule = useMemo<Module | undefined>(() => {
     return (
@@ -54,10 +53,6 @@ function SystemSettings(): JSX.Element {
       currentAllModule.find((m) => m.port === 'br-lan') ||
       currentAllModule[0]
     )
-  }, [currentAllModule])
-
-  const apCount = useMemo(() => {
-    return currentAllModule.filter((m) => m.type !== 'Main Module').length
   }, [currentAllModule])
 
   const fetchData = async (isBackground = false) => {
@@ -121,7 +116,6 @@ function SystemSettings(): JSX.Element {
     setSaving(true)
     setError(null)
     setWarnings([])
-    setSyncedModules(null)
 
     try {
       const res = await apiFetch('/api/system/general', {
@@ -142,15 +136,14 @@ function SystemSettings(): JSX.Element {
 
       const result = (await res.json().catch(() => null)) as SaveResponse | null
 
-      setSyncedModules(result?.synced_modules ?? null)
       setWarnings(result?.warnings ?? [])
 
       await fetchData()
 
       if (result?.warnings && result.warnings.length > 0) {
-        toast.success('Saved, but some AP modules could not be synced. See warnings on the page.')
+        toast.success('Saved, but some settings could not be fully applied. See warnings on the page.')
       } else {
-        toast.success('Saved successfully. Timezone has been synced to online AP modules.')
+        toast.success('Saved successfully.')
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -166,29 +159,14 @@ function SystemSettings(): JSX.Element {
       <div className="mx-auto max-w-3xl">
         <div className="mb-6">
           <h2 className="text-2xl font-bold text-gray-800">System Properties</h2>
-          <p className="text-sm text-gray-500">
-            Configure AC hostname and synchronize timezone across AC and AP modules.
-          </p>
         </div>
 
         <div className="flex flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
           <div className="flex items-center justify-between border-b border-gray-100 bg-gray-50 px-4 py-3">
             <div>
               <h3 className="text-lg font-semibold text-gray-800">
-                {acModule?.name || config.hostname || 'Main Controller'}
+                {acModule?.name || config.hostname || 'Router'}
               </h3>
-              <div className="font-mono text-xs text-gray-500">
-                {acModule?.ipaddress || 'Local AC'}
-              </div>
-            </div>
-
-            <div className="text-right">
-              <div className="rounded bg-blue-100 px-2 py-1 text-xs font-medium text-blue-700">
-                AC
-              </div>
-              <div className="mt-1 text-xs text-gray-500">
-                {apCount} AP module{apCount === 1 ? '' : 's'}
-              </div>
             </div>
           </div>
 
@@ -205,19 +183,12 @@ function SystemSettings(): JSX.Element {
 
                 {warnings.length > 0 && (
                   <div className="rounded border border-amber-100 bg-amber-50 p-3 text-sm text-amber-700">
-                    <div className="mb-1 font-medium">Sync warnings</div>
+                    <div className="mb-1 font-medium">Warnings</div>
                     <ul className="list-disc space-y-1 pl-5">
                       {warnings.map((w, idx) => (
                         <li key={`${w}-${idx}`}>{w}</li>
                       ))}
                     </ul>
-                  </div>
-                )}
-
-                {syncedModules !== null && warnings.length === 0 && (
-                  <div className="rounded border border-green-100 bg-green-50 p-3 text-sm text-green-700">
-                    Timezone synced to {syncedModules} AP module
-                    {syncedModules === 1 ? '' : 's'}.
                   </div>
                 )}
 
@@ -230,13 +201,13 @@ function SystemSettings(): JSX.Element {
                     <span className="h-2 w-2 animate-pulse rounded-full bg-green-400" />
                   </div>
                   <p className="mt-1 text-xs text-gray-500">
-                    AP local time follows the same timezone. Exact clock time still depends on NTP/system clock sync.
+                    Exact clock time still depends on NTP/system clock sync.
                   </p>
                 </div>
 
                 <div>
                   <label className="mb-1 block text-xs font-medium text-gray-500">
-                    AC Hostname
+                    Hostname
                   </label>
                   <input
                     type="text"
@@ -245,7 +216,7 @@ function SystemSettings(): JSX.Element {
                     onChange={(e) => setConfig({ ...config, hostname: e.target.value })}
                   />
                   <p className="mt-1 text-xs text-gray-500">
-                    Hostname is applied to AC only. AP hostnames remain unchanged.
+                    This name identifies the device across the interface.
                   </p>
                 </div>
 
@@ -269,7 +240,7 @@ function SystemSettings(): JSX.Element {
                     ))}
                   </select>
                   <p className="mt-1 text-xs text-gray-500">
-                    Timezone will be synced to AC and all reachable AP modules.
+                    Sets the system timezone.
                   </p>
                 </div>
               </>
@@ -284,7 +255,7 @@ function SystemSettings(): JSX.Element {
                 saving ? 'cursor-not-allowed bg-blue-400' : 'bg-blue-600 hover:bg-blue-700'
               }`}
             >
-              {saving ? 'Saving & Syncing...' : 'Save & Sync Timezone'}
+              {saving ? 'Saving...' : 'Save'}
             </button>
           </div>
         </div>
