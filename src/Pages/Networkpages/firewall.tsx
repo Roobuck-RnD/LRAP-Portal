@@ -9,7 +9,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import {
   Shield,
   RefreshCw,
-  Info,
   Plus,
   Trash2,
   Edit,
@@ -383,7 +382,7 @@ export default function Firewall(): JSX.Element {
           <div>
             <h2 className="text-3xl font-bold text-gray-900">Firewall</h2>
             <p className="mt-1 text-gray-500">
-              AC firewall overview, basic toggles, and port forwarding rules.
+              Firewall overview, basic toggles, and port forwarding rules.
             </p>
           </div>
 
@@ -399,19 +398,6 @@ export default function Firewall(): JSX.Element {
             />
             Refresh
           </Button>
-        </div>
-
-        <div className="mb-6 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-800">
-          <div className="flex gap-2">
-            <Info className="mt-0.5 h-4 w-4 shrink-0" />
-            <div>
-              <div className="font-semibold">AC-only firewall</div>
-              <p className="mt-1">
-                Firewall rules are managed on the AC main controller only. AP modules operate as
-                bridge-only access points and do not route client traffic.
-              </p>
-            </div>
-          </div>
         </div>
 
         {error && (
@@ -693,7 +679,7 @@ export default function Firewall(): JSX.Element {
                 {formMode === 'create' ? 'Add Port Forward' : 'Edit Port Forward'}
               </h3>
               <p className="text-sm text-gray-500">
-                Create a controlled DNAT rule on the AC firewall.
+                Create a controlled DNAT rule.
               </p>
             </div>
 

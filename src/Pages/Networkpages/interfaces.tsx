@@ -9,7 +9,6 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   AlertCircle,
-  Info,
   Network,
   Plus,
   RefreshCw,
@@ -212,7 +211,7 @@ export default function Interfaces(): JSX.Element {
 
   const [interfaces, setInterfaces] = useState<InterfaceStats[]>([])
   const [apManagement, setApManagement] = useState<APManagementInfo[]>([])
-  const [acName, setAcName] = useState('Main Module')
+  const [acName, setAcName] = useState('Router')
   const [acIp, setAcIp] = useState('')
 
   const [loading, setLoading] = useState(true)
@@ -267,7 +266,7 @@ export default function Interfaces(): JSX.Element {
 
         setInterfaces(Array.isArray(data.interfaces) ? data.interfaces : [])
         setApManagement(Array.isArray(data.ap_management) ? data.ap_management : [])
-        setAcName(data.ac_name || acModule?.name || 'Main Module')
+        setAcName(data.ac_name || acModule?.name || 'Router')
         setAcIp(data.ac_ip || acModule?.ipaddress || '')
       } catch (err: unknown) {
         setError(getErrorMessage(err))
@@ -502,7 +501,7 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
       const msg = getErrorMessage(err)
 
       if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
-        toast.error('Network is restarting. Please reconnect if the AC IP changed.')
+        toast.error('Network is restarting. Please reconnect if the IP changed.')
         setIsEditOpen(false)
       } else {
         toast.error('Error', { description: msg })
@@ -565,7 +564,7 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
           <div>
             <h2 className="text-3xl font-bold text-gray-900">Interfaces</h2>
             <p className="mt-1 text-gray-500">
-              Manage AC network interfaces and view AP management network settings.
+              Manage network interfaces and view antenna network settings.
             </p>
           </div>
 
@@ -587,20 +586,6 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
               <Plus className="mr-2 h-4 w-4" />
               Add Interface
             </Button>
-          </div>
-        </div>
-
-        <div className="mb-6 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-800">
-          <div className="flex gap-2">
-            <Info className="mt-0.5 h-4 w-4 shrink-0" />
-            <div>
-              <div className="font-semibold">Safe AC interface management</div>
-              <p className="mt-1">
-                New interfaces are restricted to Static address + Alias Interface "@lan". WAN is
-                read-only. AP modules remain bridge-only and are shown as read-only management
-                information.
-              </p>
-            </div>
           </div>
         </div>
 
@@ -628,17 +613,13 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
                     <ServerCog className="h-5 w-5 text-gray-600" />
                     <div>
                       <CardTitle className="text-lg">
-                        {acName || acModule?.name || 'Main Module'}
+                        {acName || acModule?.name || 'Router'}
                       </CardTitle>
                       <CardDescription>
-                        {acIp || acModule?.ipaddress || 'AC Main Controller'}
+                        {acIp || acModule?.ipaddress || ''}
                       </CardDescription>
                     </div>
                   </div>
-
-                  <span className="rounded bg-blue-100 px-2 py-1 text-xs font-medium text-blue-800">
-                    AC
-                  </span>
                 </div>
               </CardHeader>
 
@@ -819,10 +800,7 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
                 <div className="flex items-center gap-2">
                   <Wifi className="h-5 w-5 text-blue-600" />
                   <div>
-                    <CardTitle className="text-lg">AP Management Network</CardTitle>
-                    <CardDescription>
-                      Read-only management IP, gateway, and DNS for bridge AP modules.
-                    </CardDescription>
+                    <CardTitle className="text-lg">Antenna Network</CardTitle>
                   </div>
                 </div>
               </CardHeader>
@@ -830,19 +808,15 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
               <CardContent className="p-4">
                 {apManagement.length === 0 ? (
                   <div className="rounded border border-dashed p-6 text-center text-sm text-gray-500">
-                    No AP modules found.
+                    No antennas found.
                   </div>
                 ) : (
                   <div className="overflow-x-auto rounded border border-gray-200">
                     <table className="min-w-full text-left text-xs">
                       <thead className="bg-gray-50 text-gray-500">
                         <tr>
-                          <th className="px-3 py-2 font-medium">AP Module</th>
+                          <th className="px-3 py-2 font-medium">Antenna</th>
                           <th className="px-3 py-2 font-medium">Status</th>
-                          <th className="px-3 py-2 font-medium">IP Address</th>
-                          <th className="px-3 py-2 font-medium">Netmask</th>
-                          <th className="px-3 py-2 font-medium">Gateway</th>
-                          <th className="px-3 py-2 font-medium">DNS</th>
                         </tr>
                       </thead>
 
@@ -851,7 +825,7 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
                           <tr key={ap.ip || ap.name} className="hover:bg-gray-50">
                             <td className="px-3 py-2">
                               <div className="font-medium text-gray-800">
-                                {ap.name || 'AP Module'}
+                                {ap.name || 'Antenna'}
                               </div>
                               <div className="font-mono text-[11px] text-gray-400">
                                 {ap.ip || '-'}
@@ -868,22 +842,6 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
                                   Offline
                                 </span>
                               )}
-                            </td>
-
-                            <td className="px-3 py-2 font-mono text-gray-600">
-                              {ap.ipaddr || ap.ip || '-'}
-                            </td>
-
-                            <td className="px-3 py-2 font-mono text-gray-600">
-                              {ap.netmask || '-'}
-                            </td>
-
-                            <td className="px-3 py-2 font-mono text-gray-600">
-                              {ap.gateway || '-'}
-                            </td>
-
-                            <td className="px-3 py-2 font-mono text-gray-600">
-                              {ap.dns || '-'}
                             </td>
                           </tr>
                         ))}
@@ -905,20 +863,11 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
             <div className="border-b bg-gray-50 px-6 py-4">
               <h3 className="text-lg font-semibold text-gray-900">Add New Interface</h3>
               <p className="text-sm text-gray-500">
-                Create a safe LAN alias interface on the AC.
+                Create a safe LAN alias interface.
               </p>
             </div>
 
             <div className="space-y-4 p-6">
-              <div className="flex items-start gap-2 rounded-md bg-blue-50 p-3 text-sm text-blue-800">
-                <Info className="mt-0.5 h-5 w-5 shrink-0" />
-                <p>
-                  For safety, new interfaces are limited to Static address and Alias Interface
-                  "@lan". This adds an extra IP to the LAN side without changing WAN or AP bridge
-                  behavior.
-                </p>
-              </div>
-
               <div className="space-y-1.5">
                 <label className="text-sm font-medium text-gray-700">Name</label>
                 <input
@@ -1013,7 +962,7 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
               <h3 className="text-lg font-semibold text-gray-900">
                 Edit {editTarget.name || editTarget.id}
               </h3>
-              <p className="text-sm text-gray-500">Modify safe AC interface settings.</p>
+              <p className="text-sm text-gray-500">Modify safe interface settings.</p>
             </div>
 
             <div className="border-b px-6 pt-4">
@@ -1052,7 +1001,7 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
                   <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
                   <p>
                     Changing LAN IP, DHCP, gateway, or DNS may disconnect clients. Reconnect to the
-                    new AC address if the management IP changes.
+                    new address if the management IP changes.
                   </p>
                 </div>
               )}

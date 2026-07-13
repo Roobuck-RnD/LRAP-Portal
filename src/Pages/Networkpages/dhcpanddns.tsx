@@ -80,7 +80,7 @@ export default function DHCPandDNS(): JSX.Element {
   }, [currentAllModule])
 
   const [view, setView] = useState<ModuleView>({
-    name: 'Main Controller',
+    name: 'Router',
     ip: undefined,
     leases: [],
     loading: false
@@ -154,7 +154,7 @@ export default function DHCPandDNS(): JSX.Element {
   const loadAll = useCallback(async () => {
     setView((prev) => ({
       ...prev,
-      name: mainModule?.name || 'Main Controller',
+      name: mainModule?.name || 'Router',
       ip: mainModule?.ipaddress,
       loading: true,
       error: undefined
@@ -164,7 +164,7 @@ export default function DHCPandDNS(): JSX.Element {
       const leases = await fetchLeases()
 
       setView({
-        name: mainModule?.name || 'Main Controller',
+        name: mainModule?.name || 'Router',
         ip: mainModule?.ipaddress,
         leases,
         loading: false,
@@ -172,7 +172,7 @@ export default function DHCPandDNS(): JSX.Element {
       })
     } catch (error: unknown) {
       setView({
-        name: mainModule?.name || 'Main Controller',
+        name: mainModule?.name || 'Router',
         ip: mainModule?.ipaddress,
         leases: [],
         loading: false,
@@ -283,7 +283,7 @@ export default function DHCPandDNS(): JSX.Element {
         <div>
           <h2 className="text-3xl font-bold tracking-tight text-gray-900">Static DHCP Leases</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Manage fixed IPv4 assignments on the AC DHCP server. AP modules are pure APs and do not run DHCP.
+            Manage fixed IPv4 assignments on the DHCP server.
           </p>
         </div>
 
@@ -311,8 +311,8 @@ export default function DHCPandDNS(): JSX.Element {
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>DHCP Server</CardDescription>
-            <CardTitle className="text-lg">{view.name || 'Main Controller'}</CardTitle>
-            <CardDescription className="font-mono">{view.ip || 'Local AC'}</CardDescription>
+            <CardTitle className="text-lg">{view.name || 'Router'}</CardTitle>
+            <CardDescription className="font-mono">{view.ip || ''}</CardDescription>
           </CardHeader>
         </Card>
       </div>
@@ -335,9 +335,9 @@ export default function DHCPandDNS(): JSX.Element {
                 <Server className="h-5 w-5 text-primary" />
               </div>
               <div>
-                <CardTitle className="text-lg">{view.name || 'Main Controller'}</CardTitle>
+                <CardTitle className="text-lg">{view.name || 'Router'}</CardTitle>
                 <CardDescription className="font-mono mt-0.5">
-                  {view.ip || 'AC DHCP Server'}
+                  {view.ip || 'DHCP Server'}
                 </CardDescription>
               </div>
             </div>
@@ -494,8 +494,8 @@ export default function DHCPandDNS(): JSX.Element {
             </AlertDialogTitle>
             <AlertDialogDescription>
               {actionConfirm.type === 'add'
-                ? 'This will bind the IP to the MAC address on the AC DHCP server. The DHCP service will reload.'
-                : 'Are you sure you want to remove this static DHCP lease from the AC DHCP server? The DHCP service will reload.'}
+                ? 'This will bind the IP to the MAC address on the DHCP server. The DHCP service will reload.'
+                : 'Are you sure you want to remove this static DHCP lease from the DHCP server? The DHCP service will reload.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
 
@@ -524,7 +524,7 @@ export default function DHCPandDNS(): JSX.Element {
               <RefreshCw className="mb-4 h-10 w-10 animate-spin text-primary" />
               <h3 className="text-lg font-semibold text-foreground">Applying Configuration</h3>
               <p className="mt-2 text-center text-sm text-muted-foreground">
-                Reloading DHCP service on AC...
+                Reloading DHCP service...
               </p>
             </CardContent>
           </Card>
