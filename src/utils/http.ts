@@ -1,4 +1,5 @@
 import { toast } from 'sonner';
+import useDevModeStore from '@/states/devModeState';
 
 export const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -46,6 +47,9 @@ function handleUnauthorized() {
   sessionStorage.removeItem('isLoggedIn');
   sessionStorage.removeItem('token');
   sessionStorage.removeItem('username');
+
+  // token 过期只改 hash、不整页刷新,内存态不会自动清,所以显式退出开发者模式。
+  useDevModeStore.getState().setDevMode(false);
 
   if (handlingUnauthorized) return;
   handlingUnauthorized = true;

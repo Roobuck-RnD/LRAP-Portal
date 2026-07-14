@@ -2,6 +2,7 @@ import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useCurrentAllModuleStore } from '@/states/allModuleState'
+import useDevModeStore from '@/states/devModeState'
 import { apiFetch } from '@/utils/http'
 import { confirmDialog } from '@/components/ui/confirm'
 
@@ -120,8 +121,144 @@ function isReservedAPLease(lease: LeaseInfo): boolean {
   return RESERVED_AP_DHCP_IPS.has(String(lease.ip || '').trim())
 }
 
+// 单张卡抽成组件,供开发者模式的"每模块堆叠"与默认模式的"主设备三合一行"复用。
+function SysCard({ v, className }: { v: SysView; className?: string }) {
+  const info = v.sys
+
+  return (
+    <div className={`rounded-xl border border-gray-200 bg-white p-3 shadow-sm ${className ?? ''}`}>
+      <div className="mb-2 flex items-start justify-between gap-2">
+        <div className="truncate text-sm font-semibold">
+          {info?.hostname || v.name || 'Unknown Host'}
+        </div>
+        <div className="max-w-[120px] truncate text-[10px] leading-tight text-gray-500" title={info?.model || '—'}>{info?.model || '—'}</div>
+      </div>
+
+      {info ? (
+        <dl className="grid grid-cols-2 gap-x-2 gap-y-2 text-[13px] leading-tight">
+          <div>
+            <dt className="text-[10px] text-gray-500">Architecture</dt>
+            <dd className="whitespace-nowrap font-medium">{info.architecture || '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-[10px] text-gray-500">Target</dt>
+            <dd className="whitespace-nowrap font-medium">{info.target || '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-[10px] text-gray-500">Firmware</dt>
+            <dd className="whitespace-pre-wrap break-words font-medium">{info.firmware_version || '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-[10px] text-gray-500">Kernel</dt>
+            <dd className="whitespace-nowrap font-medium">{info.kernel_version || '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-[10px] text-gray-500">Local Time</dt>
+            <dd className="whitespace-nowrap font-medium">{info.local_time || '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-[10px] text-gray-500">Uptime</dt>
+            <dd className="whitespace-nowrap font-medium">{info.uptime || '—'}</dd>
+          </div>
+          <div className="col-span-2">
+            <dt className="text-[10px] text-gray-500">Load Average</dt>
+            <dd className="whitespace-nowrap font-medium">{info.load_average || '—'}</dd>
+          </div>
+          {info.temperature !== undefined && (
+            <div className="col-span-2">
+              <dt className="text-[10px] text-gray-500">Temperature</dt>
+              <dd className="whitespace-nowrap font-medium">{info.temperature ?? 'N/A'}</dd>
+            </div>
+          )}
+        </dl>
+      ) : (
+        <div className="rounded-md bg-amber-50 p-2 text-xs text-amber-700">
+          {v.error ? 'System error' : 'N/A'}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MemCard({ v, className }: { v: MemView; className?: string }) {
+  const m = v.mem
+
+  return (
+    <div className={`rounded-xl border border-gray-200 bg-white p-4 shadow-sm ${className ?? ''}`}>
+      <div className="mb-3 flex items-center justify-between">
+        <div className="text-base font-medium">{v.name || 'Unknown Host'}</div>
+        <div className="text-xs text-gray-500">{v.ip || '—'}</div>
+      </div>
+
+      {m ? (
+        <div className="space-y-2">
+          <MemoryBar label="Available" value={m.available} total={m.total} />
+          <MemoryBar label="Used" value={m.used} total={m.total} />
+          <MemoryBar label="Buffered" value={m.buffered} total={m.total} />
+          <MemoryBar label="Cached" value={m.cached} total={m.total} />
+        </div>
+      ) : (
+        <div className="rounded-md bg-amber-50 p-2 text-xs text-amber-700">
+          {v.error ? 'Memory error' : 'N/A'}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function NetCard({ v, className }: { v: NetView; className?: string }) {
+  const n = v.net
+
+  return (
+    <div className={`rounded-xl border border-gray-200 bg-white p-4 shadow-sm ${className ?? ''}`}>
+      <div className="mb-3 flex items-center justify-between">
+        <div className="text-base font-medium">{v.name || 'Unknown Host'}</div>
+        <div className="text-xs text-gray-500">{v.ip || '—'}</div>
+      </div>
+
+      {n ? (
+        <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
+          <div>
+            <dt className="text-xs text-gray-500">Protocol</dt>
+            <dd className="font-medium">{n.protocol || '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-gray-500">Device</dt>
+            <dd className="font-medium">{n.device || '—'}</dd>
+          </div>
+          <div className="col-span-2">
+            <dt className="text-xs text-gray-500">Address</dt>
+            <dd className="break-all font-medium">{n.address || '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-gray-500">Gateway</dt>
+            <dd className="font-medium">{n.gateway || '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-gray-500">DNS</dt>
+            <dd className="font-medium">{n.dns || '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-gray-500">Connected</dt>
+            <dd className="font-medium">{n.connected || '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-gray-500">MAC</dt>
+            <dd className="break-all font-medium">{n.mac || '—'}</dd>
+          </div>
+        </dl>
+      ) : (
+        <div className="rounded-md bg-amber-50 p-2 text-xs text-amber-700">
+          {v.error ? 'Network error' : 'N/A'}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function Overview(): JSX.Element {
   const { currentAllModule } = useCurrentAllModuleStore()
+  const { devMode } = useDevModeStore()
 
   const [sysViews, setSysViews] = useState<SysView[]>([])
   const [memViews, setMemViews] = useState<MemView[]>([])
@@ -129,11 +266,11 @@ function Overview(): JSX.Element {
 
   // AC-only DHCP state
   const [leaseView, setLeaseView] = useState<LeaseView>({
-    name: 'Main Module',
+    name: 'Router',
     leases: []
   })
   const [staticView, setStaticView] = useState<StaticView>({
-    name: 'Main Module',
+    name: 'Router',
     statics: {}
   })
   const [leaseSearch, setLeaseSearch] = useState('')
@@ -191,7 +328,7 @@ function Overview(): JSX.Element {
       setLeasesLoading(true)
 
       try {
-        const leases = await fetchJSON<LeaseInfo[]>('/api/lan/leases', 'AC /leases')
+        const leases = await fetchJSON<LeaseInfo[]>('/api/lan/leases', 'leases')
 
         if (cancelledRef?.cancelled) return
 
@@ -200,7 +337,7 @@ function Overview(): JSX.Element {
           : []
 
         setLeaseView({
-          name: mainModule?.name || 'Main Module',
+          name: mainModule?.name || 'Router',
           ip: mainModule?.ipaddress,
           leases: visibleLeases
         })
@@ -209,7 +346,7 @@ function Overview(): JSX.Element {
 
         console.error('AC leases fetch failed:', e)
         setLeaseView({
-          name: mainModule?.name || 'Main Module',
+          name: mainModule?.name || 'Router',
           ip: mainModule?.ipaddress,
           error: String(e)
         })
@@ -247,7 +384,7 @@ function Overview(): JSX.Element {
         if (cancelledRef?.cancelled) return
 
         setStaticView({
-          name: mainModule?.name || 'Main Module',
+          name: mainModule?.name || 'Router',
           ip: mainModule?.ipaddress,
           statics: mapObj
         })
@@ -256,7 +393,7 @@ function Overview(): JSX.Element {
 
         console.error('Static map fetch failed:', e)
         setStaticView({
-          name: mainModule?.name || 'Main Module',
+          name: mainModule?.name || 'Router',
           ip: mainModule?.ipaddress,
           error: String(e)
         })
@@ -271,7 +408,7 @@ function Overview(): JSX.Element {
       setSysViews([])
       setMemViews([])
       setNetViews([])
-      setLeaseView({ name: 'Main Module', leases: [] })
+      setLeaseView({ name: 'Router', leases: [] })
       return
     }
 
@@ -435,7 +572,7 @@ function Overview(): JSX.Element {
     const ok = await confirmDialog({
       title: 'Reset DHCP leases?',
       description:
-        'This will clear current DHCP lease records on the AC and restart dnsmasq. Clients may need to renew DHCP. Continue?',
+        'This will clear current DHCP lease records and restart dnsmasq. Clients may need to renew DHCP. Continue?',
       destructive: true,
       confirmText: 'Reset'
     })
@@ -546,6 +683,24 @@ function Overview(): JSX.Element {
     return !!staticView.statics?.[macUpper]
   }).length
 
+  // 非开发者模式:System / Memory / Network 三段只显示主设备(Router),隐藏各
+  // Antenna 卡。主设备按 IP(其次 name)与 mainModule 匹配。
+  const isMainView = (v: { name: string; ip?: string }): boolean =>
+    (!!mainModule?.ipaddress && v.ip === mainModule.ipaddress) ||
+    (!!mainModule?.name && v.name === mainModule.name)
+
+  const visibleSysViews = devMode ? sysViews : sysViews.filter(isMainView)
+  const visibleMemViews = devMode ? memViews : memViews.filter(isMainView)
+  const visibleNetViews = devMode ? netViews : netViews.filter(isMainView)
+
+  // 开发者模式:每模块一卡,走多列网格。
+  const cardsGridClass = 'grid grid-cols-1 gap-4 md:grid-cols-3 xl:grid-cols-5'
+
+  // 默认模式:只有主设备,把 System / Memory / Network 三张卡并成一行(见下方)。
+  const mainSysView = visibleSysViews[0]
+  const mainMemView = visibleMemViews[0]
+  const mainNetView = visibleNetViews[0]
+
   return (
     <div className="relative p-4">
       {/* ---------- Fullscreen Overlay ---------- */}
@@ -584,184 +739,97 @@ function Overview(): JSX.Element {
         </div>
       )}
 
-      {/* ---------- System Info ---------- */}
-      <div className="mb-3">
-        <h2 className="text-lg font-semibold">System Info</h2>
-      </div>
+      {devMode ? (
+        <>
+          {/* ---------- System Info (per-module) ---------- */}
+          <div className="mb-3">
+            <h2 className="text-lg font-semibold">System Info</h2>
+          </div>
 
-      {sysViews.length === 0 ? (
-        <div className="text-sm text-gray-500">Loading system info…</div>
+          {sysViews.length === 0 ? (
+            <div className="text-sm text-gray-500">Loading system info…</div>
+          ) : (
+            <div className={cardsGridClass}>
+              {visibleSysViews.map((v, idx) => (
+                <SysCard key={(v.sys?.hostname || v.name || 'sys') + '-' + idx} v={v} />
+              ))}
+            </div>
+          )}
+
+          <div className="my-6 h-px w-full bg-gray-200" />
+
+          {/* ---------- System Memory (per-module) ---------- */}
+          <div className="mb-3">
+            <h2 className="text-lg font-semibold">System Memory</h2>
+          </div>
+
+          {memViews.length === 0 ? (
+            <div className="text-sm text-gray-500">Loading memory…</div>
+          ) : (
+            <div className={cardsGridClass}>
+              {visibleMemViews.map((v, idx) => (
+                <MemCard key={(v.name || 'mem') + '-' + idx} v={v} />
+              ))}
+            </div>
+          )}
+
+          <div className="my-6 h-px w-full bg-gray-200" />
+
+          {/* ---------- Network (per-module) ---------- */}
+          <div className="mb-3">
+            <h2 className="text-lg font-semibold">Network</h2>
+          </div>
+
+          {netViews.length === 0 ? (
+            <div className="text-sm text-gray-500">Loading network…</div>
+          ) : (
+            <div className={cardsGridClass}>
+              {visibleNetViews.map((v, idx) => (
+                <NetCard key={(v.name || 'net') + '-' + idx} v={v} />
+              ))}
+            </div>
+          )}
+        </>
       ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3 xl:grid-cols-5">
-          {sysViews.map((v, idx) => {
-            const info = v.sys
+        <>
+          {/* ---------- 默认模式:主设备的 System / Memory / Network 三合一行 ---------- */}
+          <div className="mb-3">
+            <h2 className="text-lg font-semibold">Device Overview</h2>
+          </div>
 
-            return (
-              <div
-                key={(info?.hostname || v.name || 'sys') + '-' + idx}
-                className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm"
-              >
-                <div className="mb-2 flex items-start justify-between gap-2">
-                  <div className="truncate text-sm font-semibold">
-                    {info?.hostname || v.name || 'Unknown Host'}
-                  </div>
-                  <div className="max-w-[120px] truncate text-[10px] leading-tight text-gray-500" title={info?.model || '—'}>{info?.model || '—'}</div>
-                </div>
-
-                {info ? (
-                  <dl className="grid grid-cols-2 gap-x-2 gap-y-2 text-[13px] leading-tight">
-                    <div>
-                      <dt className="text-[10px] text-gray-500">Architecture</dt>
-                      <dd className="whitespace-nowrap font-medium">{info.architecture || '—'}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-[10px] text-gray-500">Target</dt>
-                      <dd className="whitespace-nowrap font-medium">{info.target || '—'}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-[10px] text-gray-500">Firmware</dt>
-                      <dd className="whitespace-pre-wrap break-words font-medium">{info.firmware_version || '—'}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-[10px] text-gray-500">Kernel</dt>
-                      <dd className="whitespace-nowrap font-medium">{info.kernel_version || '—'}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-[10px] text-gray-500">Local Time</dt>
-                      <dd className="whitespace-nowrap font-medium">{info.local_time || '—'}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-[10px] text-gray-500">Uptime</dt>
-                      <dd className="whitespace-nowrap font-medium">{info.uptime || '—'}</dd>
-                    </div>
-                    <div className="col-span-2">
-                      <dt className="text-[10px] text-gray-500">Load Average</dt>
-                      <dd className="whitespace-nowrap font-medium">{info.load_average || '—'}</dd>
-                    </div>
-                    {info.temperature !== undefined && (
-                      <div className="col-span-2">
-                        <dt className="text-[10px] text-gray-500">Temperature</dt>
-                        <dd className="whitespace-nowrap font-medium">{info.temperature ?? 'N/A'}</dd>
-                      </div>
-                    )}
-                  </dl>
+          {sysViews.length === 0 && memViews.length === 0 && netViews.length === 0 ? (
+            <div className="text-sm text-gray-500">Loading…</div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+              <div className="flex flex-col gap-2">
+                <h3 className="text-xs font-medium uppercase tracking-wide text-gray-500">System</h3>
+                {mainSysView ? (
+                  <SysCard v={mainSysView} className="flex-1" />
                 ) : (
-                  <div className="rounded-md bg-amber-50 p-2 text-xs text-amber-700">
-                    {v.error ? 'System error' : 'N/A'}
-                  </div>
+                  <div className="text-sm text-gray-500">Loading…</div>
                 )}
               </div>
-            )
-          })}
-        </div>
-      )}
 
-      <div className="my-6 h-px w-full bg-gray-200" />
-
-      {/* ---------- System Memory ---------- */}
-      <div className="mb-3">
-        <h2 className="text-lg font-semibold">System Memory</h2>
-      </div>
-
-      {memViews.length === 0 ? (
-        <div className="text-sm text-gray-500">Loading memory…</div>
-      ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3 xl:grid-cols-5">
-          {memViews.map((v, idx) => {
-            const m = v.mem
-
-            return (
-              <div
-                key={(v.name || 'mem') + '-' + idx}
-                className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm"
-              >
-                <div className="mb-3 flex items-center justify-between">
-                  <div className="text-base font-medium">{v.name || 'Unknown Host'}</div>
-                  <div className="text-xs text-gray-500">{v.ip || '—'}</div>
-                </div>
-
-                {m ? (
-                  <div className="space-y-2">
-                    <MemoryBar label="Available" value={m.available} total={m.total} />
-                    <MemoryBar label="Used" value={m.used} total={m.total} />
-                    <MemoryBar label="Buffered" value={m.buffered} total={m.total} />
-                    <MemoryBar label="Cached" value={m.cached} total={m.total} />
-                  </div>
+              <div className="flex flex-col gap-2">
+                <h3 className="text-xs font-medium uppercase tracking-wide text-gray-500">Memory</h3>
+                {mainMemView ? (
+                  <MemCard v={mainMemView} className="flex-1" />
                 ) : (
-                  <div className="rounded-md bg-amber-50 p-2 text-xs text-amber-700">
-                    {v.error ? 'Memory error' : 'N/A'}
-                  </div>
+                  <div className="text-sm text-gray-500">Loading…</div>
                 )}
               </div>
-            )
-          })}
-        </div>
-      )}
 
-      <div className="my-6 h-px w-full bg-gray-200" />
-
-      {/* ---------- Network ---------- */}
-      <div className="mb-3">
-        <h2 className="text-lg font-semibold">Network</h2>
-      </div>
-
-      {netViews.length === 0 ? (
-        <div className="text-sm text-gray-500">Loading network…</div>
-      ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3 xl:grid-cols-5">
-          {netViews.map((v, idx) => {
-            const n = v.net
-
-            return (
-              <div
-                key={(v.name || 'net') + '-' + idx}
-                className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm"
-              >
-                <div className="mb-3 flex items-center justify-between">
-                  <div className="text-base font-medium">{v.name || 'Unknown Host'}</div>
-                  <div className="text-xs text-gray-500">{v.ip || '—'}</div>
-                </div>
-
-                {n ? (
-                  <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
-                    <div>
-                      <dt className="text-xs text-gray-500">Protocol</dt>
-                      <dd className="font-medium">{n.protocol || '—'}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-xs text-gray-500">Device</dt>
-                      <dd className="font-medium">{n.device || '—'}</dd>
-                    </div>
-                    <div className="col-span-2">
-                      <dt className="text-xs text-gray-500">Address</dt>
-                      <dd className="break-all font-medium">{n.address || '—'}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-xs text-gray-500">Gateway</dt>
-                      <dd className="font-medium">{n.gateway || '—'}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-xs text-gray-500">DNS</dt>
-                      <dd className="font-medium">{n.dns || '—'}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-xs text-gray-500">Connected</dt>
-                      <dd className="font-medium">{n.connected || '—'}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-xs text-gray-500">MAC</dt>
-                      <dd className="break-all font-medium">{n.mac || '—'}</dd>
-                    </div>
-                  </dl>
+              <div className="flex flex-col gap-2">
+                <h3 className="text-xs font-medium uppercase tracking-wide text-gray-500">Network</h3>
+                {mainNetView ? (
+                  <NetCard v={mainNetView} className="flex-1" />
                 ) : (
-                  <div className="rounded-md bg-amber-50 p-2 text-xs text-amber-700">
-                    {v.error ? 'Network error' : 'N/A'}
-                  </div>
+                  <div className="text-sm text-gray-500">Loading…</div>
                 )}
               </div>
-            )
-          })}
-        </div>
+            </div>
+          )}
+        </>
       )}
 
       <div className="my-6 h-px w-full bg-gray-200" />
@@ -770,9 +838,6 @@ function Overview(): JSX.Element {
       <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h2 className="text-lg font-semibold">DHCP Leases</h2>
-          <p className="text-xs text-gray-500">
-            AC DHCP server only. Reserved AP management IPs 10.10.18.2–10.10.18.5 are hidden.
-          </p>
         </div>
 
         <button
@@ -820,8 +885,8 @@ function Overview(): JSX.Element {
       <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
         <div className="mb-3 flex items-center justify-between">
           <div>
-            <div className="text-base font-medium">{leaseView.name || 'Main Module'}</div>
-            <div className="text-xs text-gray-500">{leaseView.ip || 'AC DHCP Server'}</div>
+            <div className="text-base font-medium">{leaseView.name || 'Router'}</div>
+            <div className="text-xs text-gray-500">{leaseView.ip || 'DHCP Server'}</div>
           </div>
 
           {leasesLoading && <div className="text-xs text-gray-400">Refreshing…</div>}
