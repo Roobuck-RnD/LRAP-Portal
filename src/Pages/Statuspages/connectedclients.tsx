@@ -1,6 +1,7 @@
 import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch } from '@/utils/http'
+import useDevModeStore from '@/states/devModeState'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -84,12 +85,6 @@ function signalText(client: ConnectedClient): string {
   return 'Weak'
 }
 
-function moduleTypeLabel(type: ModuleType): string {
-  if (type === 'main') return 'AC'
-  if (type === 'ap') return 'AP'
-  return String(type || 'Module')
-}
-
 function bandBadgeClass(band?: string): string {
   const b = (band || '').toLowerCase()
 
@@ -126,12 +121,13 @@ function stableStringifyModules(modules: ClientModule[]): string {
 }
 
 function ConnectedClients(): JSX.Element {
+  const { devMode } = useDevModeStore()
+
   const [modules, setModules] = useState<ClientModule[]>([])
   const [initialLoading, setInitialLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
-  const [lastUpdated, setLastUpdated] = useState<string>('')
 
   const modulesSnapshotRef = useRef<string>('')
   const hasLoadedOnceRef = useRef(false)
@@ -169,7 +165,6 @@ function ConnectedClients(): JSX.Element {
         setModules(nextModules)
       }
 
-      setLastUpdated(new Date().toLocaleTimeString())
       setError(null)
       hasLoadedOnceRef.current = true
     } catch (err: unknown) {
@@ -261,12 +256,6 @@ function ConnectedClients(): JSX.Element {
       <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
           <h2 className="text-3xl font-bold text-gray-900">Connected Clients</h2>
-          <p className="mt-1 text-gray-500">
-            View wireless clients currently connected to the main module and access points.
-          </p>
-          {lastUpdated && (
-            <p className="mt-1 text-xs text-gray-400">Last updated: {lastUpdated}</p>
-          )}
         </div>
 
         <Button
@@ -301,7 +290,7 @@ function ConnectedClients(): JSX.Element {
 
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>AC Clients</CardDescription>
+            <CardDescription>Router Clients</CardDescription>
             <CardTitle className="flex items-center gap-2 text-3xl">
               <Router className="h-6 w-6 text-gray-700" />
               {acClients}
@@ -311,7 +300,7 @@ function ConnectedClients(): JSX.Element {
 
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>AP Clients</CardDescription>
+            <CardDescription>Antenna Clients</CardDescription>
             <CardTitle className="flex items-center gap-2 text-3xl">
               <Wifi className="h-6 w-6 text-purple-600" />
               {apClients}
@@ -321,7 +310,7 @@ function ConnectedClients(): JSX.Element {
 
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Access Points</CardDescription>
+            <CardDescription>Antenna Number</CardDescription>
             <CardTitle className="flex items-center gap-2 text-3xl">
               <Wifi className="h-6 w-6 text-blue-600" />
               {apCount}
@@ -335,18 +324,18 @@ function ConnectedClients(): JSX.Element {
         <Input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by hostname, IP, MAC, SSID, or AP name..."
+          placeholder="Search by hostname, IP, MAC, SSID, or device name..."
           className="border-0 shadow-none focus-visible:ring-0"
         />
       </div>
 
       <div className="mb-8">
-        <h3 className="mb-3 text-lg font-semibold text-gray-900">Modules</h3>
+        <h3 className="mb-3 text-lg font-semibold text-gray-900">Devices</h3>
 
         {modules.length === 0 ? (
           <Card>
             <CardContent className="p-6 text-sm text-gray-500">
-              No modules found.
+              No devices found.
             </CardContent>
           </Card>
         ) : (
@@ -371,27 +360,31 @@ function ConnectedClients(): JSX.Element {
 
                         <div>
                           <CardTitle className="text-base">
-                            {mod.name || 'Unknown Module'}
+                            {mod.name || 'Unknown Device'}
                           </CardTitle>
 
-                          <CardDescription>{mod.ip || '—'}</CardDescription>
+                          {devMode && (
+                            <>
+                              <CardDescription>{mod.ip || '—'}</CardDescription>
 
-                          <div className="mt-2 space-y-1 text-[11px] leading-tight text-gray-500">
-                            <div>
-                              <span className="font-medium text-gray-600">br-lan:</span>{' '}
-                              <span className="font-mono">{brLanMac || '—'}</span>
-                            </div>
+                              <div className="mt-2 space-y-1 text-[11px] leading-tight text-gray-500">
+                                <div>
+                                  <span className="font-medium text-gray-600">br-lan:</span>{' '}
+                                  <span className="font-mono">{brLanMac || '—'}</span>
+                                </div>
 
-                            <div>
-                              <span className="font-medium text-gray-600">ra0 / 2.4G:</span>{' '}
-                              <span className="font-mono">{ra0Mac || '—'}</span>
-                            </div>
+                                <div>
+                                  <span className="font-medium text-gray-600">ra0 / 2.4G:</span>{' '}
+                                  <span className="font-mono">{ra0Mac || '—'}</span>
+                                </div>
 
-                            <div>
-                              <span className="font-medium text-gray-600">rax0 / 5G:</span>{' '}
-                              <span className="font-mono">{rax0Mac || '—'}</span>
-                            </div>
-                          </div>
+                                <div>
+                                  <span className="font-medium text-gray-600">rax0 / 5G:</span>{' '}
+                                  <span className="font-mono">{rax0Mac || '—'}</span>
+                                </div>
+                              </div>
+                            </>
+                          )}
                         </div>
                       </div>
 
@@ -414,10 +407,6 @@ function ConnectedClients(): JSX.Element {
                         <div className="text-xs text-gray-500">Connected Clients</div>
                         <div className="text-3xl font-bold text-gray-900">{clientCount}</div>
                       </div>
-
-                      <span className="rounded bg-gray-100 px-2 py-1 text-xs text-gray-700">
-                        {moduleTypeLabel(mod.type)}
-                      </span>
                     </div>
                   </CardContent>
                 </Card>
@@ -480,7 +469,9 @@ function ConnectedClients(): JSX.Element {
 
                       <td className="px-3 py-2">
                         <div className="font-medium text-gray-900">{client.moduleName}</div>
-                        <div className="text-xs text-gray-500">{client.moduleIP || '—'}</div>
+                        {devMode && (
+                          <div className="text-xs text-gray-500">{client.moduleIP || '—'}</div>
+                        )}
                       </td>
 
                       <td className="px-3 py-2 text-gray-700">{client.ssid || '—'}</td>
