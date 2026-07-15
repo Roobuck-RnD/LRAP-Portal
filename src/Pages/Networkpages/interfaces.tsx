@@ -3,6 +3,7 @@ import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useCurrentAllModuleStore } from '@/states/allModuleState'
+import useDevModeStore from '@/states/devModeState'
 import { apiFetch } from '@/utils/http'
 import { confirmDialog } from '@/components/ui/confirm'
 import { Button } from '@/components/ui/button'
@@ -200,6 +201,7 @@ function delay(ms: number) {
 
 export default function Interfaces(): JSX.Element {
   const { currentAllModule } = useCurrentAllModuleStore()
+  const { devMode } = useDevModeStore()
 
   const acModule = useMemo<Module | undefined>(() => {
     return (
@@ -827,9 +829,11 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
                               <div className="font-medium text-gray-800">
                                 {ap.name || 'Antenna'}
                               </div>
-                              <div className="font-mono text-[11px] text-gray-400">
-                                {ap.ip || '-'}
-                              </div>
+                              {devMode && (
+                                <div className="font-mono text-[11px] text-gray-400">
+                                  {ap.ip || '-'}
+                                </div>
+                              )}
                             </td>
 
                             <td className="px-3 py-2">
@@ -854,7 +858,6 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
           </div>
         )}
 
-        <div className="mt-4 text-xs text-gray-400">Auto-refreshes every 5 seconds.</div>
       </div>
 
       {isAddOpen && (

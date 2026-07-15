@@ -6,7 +6,7 @@ import { confirmDialog } from '@/components/ui/confirm'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Wifi, Save, AlertCircle, CheckCircle2, RadioTower, Settings2, Power, Eye, EyeOff } from 'lucide-react'
 
 // ---------- Types ----------
@@ -210,7 +210,7 @@ function validateWifiConfig(config: WifiConfig): string | null {
 
 function normalizeRadioModule(mod: Partial<WifiModuleRadio>): WifiModuleRadio {
   return {
-    name: mod.name || 'Unknown Module',
+    name: mod.name || 'Unknown Device',
     type: mod.type || 'ap',
     ip: mod.ip || '',
     online: mod.online !== false,
@@ -476,7 +476,7 @@ export default function WiFiConfiguration(): JSX.Element {
     const ok = await confirmDialog({
       title: 'Apply WiFi settings?',
       description:
-        'This will apply 2.4GHz/5GHz SSID/password to all reachable modules, and apply each module radio settings individually. WiFi interfaces will restart. Continue?',
+        'This will apply the 2.4GHz/5GHz SSID/password and per-radio settings. WiFi interfaces will restart. Continue?',
       confirmText: 'Apply'
     })
 
@@ -544,7 +544,7 @@ export default function WiFiConfiguration(): JSX.Element {
       if (failed.length > 0) {
         setSuccess(`WiFi settings applied with ${failed.length} warning(s).`)
       } else {
-        setSuccess('WiFi settings applied successfully to all reachable modules.')
+        setSuccess('WiFi settings applied successfully.')
       }
 
       await fetchWifi({ silent: true, preserveMessages: true })
@@ -588,9 +588,6 @@ export default function WiFiConfiguration(): JSX.Element {
       <div className="mx-auto w-full max-w-none">
         <div className="mb-4">
           <h2 className="text-2xl font-bold text-gray-900">WiFi Configuration</h2>
-          <p className="mt-1 text-sm text-gray-500">
-            Configure shared 2.4GHz/5GHz SSID/password, per-module radio settings, and persistent runtime WiFi state.
-          </p>
         </div>
 
         <div className="grid gap-3">
@@ -599,10 +596,7 @@ export default function WiFiConfiguration(): JSX.Element {
               <div className="flex items-center gap-1.5">
                 <Wifi className="h-5 w-5 text-blue-600" />
                 <div>
-                  <CardTitle className="text-lg">Unified WiFi Settings</CardTitle>
-                  <CardDescription>
-                    SSID and password are synced to AC and all reachable AP modules.
-                  </CardDescription>
+                  <CardTitle className="text-lg">WiFi Settings</CardTitle>
                 </div>
               </div>
             </CardHeader>
@@ -711,10 +705,7 @@ export default function WiFiConfiguration(): JSX.Element {
               <div className="flex items-center gap-1.5">
                 <RadioTower className="h-5 w-5 text-purple-600" />
                 <div>
-                  <CardTitle className="text-lg">Per-module Radio Settings</CardTitle>
-                  <CardDescription>
-                    2.4GHz and 5GHz channel, channel width, TX power, and enable/disable state are configured independently per module. Disabled state is re-applied every 5 seconds.
-                  </CardDescription>
+                  <CardTitle className="text-lg">Radio Settings</CardTitle>
                 </div>
               </div>
             </CardHeader>
@@ -722,14 +713,13 @@ export default function WiFiConfiguration(): JSX.Element {
             <CardContent className="px-3 pb-3 sm:px-4 sm:pb-4">
               {(config.modules || []).length === 0 ? (
                 <div className="rounded border border-dashed p-4 text-center text-sm text-gray-500">
-                  No online modules found.
+                  No devices found.
                 </div>
               ) : (
                 <div className="w-full overflow-x-auto">
                   <table className="w-full min-w-[1180px] table-fixed text-xs">
                     <colgroup>
-                      <col style={{ width: '11%' }} />
-                      <col style={{ width: '8%' }} />
+                      <col style={{ width: '19%' }} />
                       <col style={{ width: '15.5%' }} />
                       <col style={{ width: '7%' }} />
                       <col style={{ width: '7%' }} />
@@ -742,10 +732,7 @@ export default function WiFiConfiguration(): JSX.Element {
                     <thead className="border-b bg-gray-50 text-xs text-gray-500">
                       <tr>
                         <th rowSpan={2} className="px-1.5 py-2 text-left align-bottom">
-                          Module
-                        </th>
-                        <th rowSpan={2} className="px-1.5 py-2 text-left align-bottom">
-                          IP
+                          Device
                         </th>
                         <th colSpan={4} className="border-l px-1.5 py-2 text-center">
                           2.4GHz
@@ -774,17 +761,10 @@ export default function WiFiConfiguration(): JSX.Element {
                               <Settings2 className="h-4 w-4 text-gray-500" />
                               <div>
                                 <div className="font-medium text-gray-900">
-                                  {mod.name || (mod.type === 'main' ? 'Main Module' : 'AP Module')}
-                                </div>
-                                <div className="text-xs text-gray-500">
-                                  {mod.type === 'main' ? 'AC' : 'AP'} · {mod.online ? 'Online' : 'Config read failed'}
+                                  {mod.name || (mod.type === 'main' ? 'Router' : 'Antenna')}
                                 </div>
                               </div>
                             </div>
-                          </td>
-
-                          <td className="px-1.5 py-2 font-mono text-xs text-gray-600">
-                            {mod.ip || 'Local AC'}
                           </td>
 
                           <td className="border-l px-1.5 py-2">
@@ -935,11 +915,11 @@ export default function WiFiConfiguration(): JSX.Element {
                   className="bg-blue-600 text-white hover:bg-blue-700"
                 >
                   {saving ? (
-                    'Applying to all modules...'
+                    'Applying...'
                   ) : (
                     <>
                       <Save className="mr-2 h-4 w-4" />
-                      Save & Sync WiFi
+                      Save WiFi Settings
                     </>
                   )}
                 </Button>

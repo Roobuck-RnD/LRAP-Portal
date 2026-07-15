@@ -456,7 +456,6 @@ export default function DHCPandDNS(): JSX.Element {
                     </Label>
                     <Input
                       id="ip-ac"
-                      placeholder="10.10.18.x"
                       className="h-8 text-xs font-mono"
                       value={form.ipaddr}
                       onChange={(e) => handleFormChange('ipaddr', e.target.value)}
