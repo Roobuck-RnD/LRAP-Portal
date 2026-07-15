@@ -358,6 +358,29 @@ func getMtkWifiLogic() (MtkWifiInfo, error) {
 
 // ---------- 保存配置 ----------
 
+// genericIfErr 把带内网 IP/细节的错误换成面向用户的通用文案(nil 时返回空串)。
+func genericIfErr(err error, msg string) string {
+	if err == nil {
+		return ""
+	}
+	return msg
+}
+
+// mtkResultTarget 给 Sync-result 面板算显示名:能解析物理口就 Antenna<N>;否则用传入
+// name;再兜底 Router/Antenna。不暴露 AC/AP/RoobuckAP。与其它端点的 apDisplayName 一致。
+func mtkResultTarget(name, typ, ip string, portByIP map[string]int) string {
+	if p := portByIP[ip]; p > 0 {
+		return apDisplayName(name, p)
+	}
+	if n := strings.TrimSpace(name); n != "" {
+		return n
+	}
+	if typ == "main" || ip == "" {
+		return "Router"
+	}
+	return "Antenna"
+}
+
 func setMtkWifiLogic(req MtkWifiInfo) (MtkWifiSaveResponse, error) {
 	mtkMutex.Lock()
 	defer mtkMutex.Unlock()
@@ -373,16 +396,11 @@ func setMtkWifiLogic(req MtkWifiInfo) (MtkWifiSaveResponse, error) {
 
 	results := make([]MtkWifiSyncResult, 0, len(req.Modules))
 	needApplyLocal := false
+	portByIP := apPortIndexByIP()
 
 	for _, mod := range req.Modules {
-		target := mod.Name
-		if target == "" {
-			if mod.Type == "main" {
-				target = "Main Module"
-			} else {
-				target = "AP"
-			}
-		}
+		// Result.IP 仅用于前端显示,一律置空以免暴露管理网 IP;实际写入仍用 mod.IP 内部寻址。
+		target := mtkResultTarget(mod.Name, mod.Type, mod.IP, portByIP)
 
 		if mod.Type == "main" || mod.IP == "" {
 			err := updateLocalMtkWifi(req, mod)
@@ -403,20 +421,24 @@ func setMtkWifiLogic(req MtkWifiInfo) (MtkWifiSaveResponse, error) {
 		if !mtkPingOnce(mod.IP) {
 			results = append(results, MtkWifiSyncResult{
 				Target: target,
-				IP:     mod.IP,
+				IP:     "",
 				OK:     false,
-				Error:  "module unreachable",
+				Error:  "device unreachable",
 			})
 			continue
 		}
 
 		err := updateRemoteMtkWifi(mod.IP, req, mod)
+		if err != nil {
+			// 详细错误(含 IP)只进服务端日志;面板显示通用文案。
+			fmt.Printf("[MTK WiFi] update failed for %s (%s): %v\n", target, mod.IP, err)
+		}
 
 		results = append(results, MtkWifiSyncResult{
 			Target: target,
-			IP:     mod.IP,
+			IP:     "",
 			OK:     err == nil,
-			Error:  errString(err),
+			Error:  genericIfErr(err, "update failed"),
 		})
 	}
 
@@ -662,14 +684,7 @@ func setMtkWifiRadioStateLogic(req MtkWifiRadioToggleRequest) (MtkWifiRadioToggl
 	}
 
 	key := mtkModuleStateKey(req.Type, req.IP)
-	target := strings.TrimSpace(req.Name)
-	if target == "" {
-		if key == mtkStateMainKey {
-			target = "Main Module"
-		} else {
-			target = "AP"
-		}
-	}
+	target := mtkResultTarget(req.Name, req.Type, req.IP, apPortIndexByIP())
 
 	centralState, err := readLocalMtkCentralWifiState()
 	if err != nil {
@@ -706,9 +721,9 @@ func setMtkWifiRadioStateLogic(req MtkWifiRadioToggleRequest) (MtkWifiRadioToggl
 			Status: "ok",
 			Result: MtkWifiSyncResult{
 				Target: target,
-				IP:     req.IP,
+				IP:     "",
 				OK:     false,
-				Error:  "state saved on main module, but module unreachable",
+				Error:  "state saved, but device unreachable",
 			},
 			State:   moduleState,
 			Runtime: mtkRadioRuntimeStatus{},
@@ -717,14 +732,17 @@ func setMtkWifiRadioStateLogic(req MtkWifiRadioToggleRequest) (MtkWifiRadioToggl
 
 	err = applyRemoteMtkRadioState(req.IP, moduleState)
 	runtime := getRemoteMtkRadioRuntimeStatus(req.IP)
+	if err != nil {
+		fmt.Printf("[MTK WiFi] radio state apply failed for %s (%s): %v\n", target, req.IP, err)
+	}
 
 	return MtkWifiRadioToggleResponse{
 		Status: "ok",
 		Result: MtkWifiSyncResult{
 			Target: target,
-			IP:     req.IP,
+			IP:     "",
 			OK:     err == nil,
-			Error:  errString(err),
+			Error:  genericIfErr(err, "update failed"),
 		},
 		State:   moduleState,
 		Runtime: runtime,
@@ -1520,7 +1538,7 @@ func hostnameFromLocalOrFallback() string {
 		}
 	}
 
-	return "Main Module"
+	return "Router"
 }
 
 func mtkRemoteHostname(ip string) string {
@@ -1564,7 +1582,7 @@ func errString(err error) string {
 func sortMtkModules(modules []MtkWifiModuleRadio) {
 	for i := range modules {
 		if modules[i].Type == "main" {
-			modules[i].Name = nonEmpty(modules[i].Name, "Main Module")
+			modules[i].Name = nonEmpty(modules[i].Name, "Router")
 		}
 	}
 
