@@ -56,6 +56,12 @@ type FlashResponse = {
 
 const AC_UPGRADE_REBOOT_DELAY = 240;
 
+// 轮询进度的兜底上限,防止进度页无限卡在 waiting。
+// 总上限 > 后端每 AP 8 分钟验证超时 + AC 重启预算。
+const FLASH_POLL_MAX_TOTAL_MS = 15 * 60 * 1000;
+// 尚未进入 AC 自刷阶段就断连:重试这么久仍连不上 → 判为无法确认/失败,不再干等。
+const FLASH_POLL_DISCONNECT_GIVEUP_MS = 90 * 1000;
+
 type FirmwarePickerProps = {
   file: File | null;
   disabled?: boolean;
@@ -260,6 +266,8 @@ export default function FlashFirmware(): JSX.Element {
   const [acRebootCountdown, setAcRebootCountdown] = useState<number | null>(
     null,
   );
+  // 烧录进度弹窗:开始烧录即打开,烧录中不可关闭,结束(成功/失败)后才出现 Confirm。
+  const [flashLogOpen, setFlashLogOpen] = useState(false);
 
   const visibleResults = useMemo(() => {
     return results.filter((result) => !shouldHideResult(result, results));
@@ -363,6 +371,7 @@ export default function FlashFirmware(): JSX.Element {
     if (!ok) return;
 
     setFlashing(true);
+    setFlashLogOpen(true);
     setMessage("Uploading firmware package. The upgrade will start shortly.");
     setResults([]);
 
@@ -374,11 +383,23 @@ export default function FlashFirmware(): JSX.Element {
       setMessage(data.message || "Package accepted. Upgrade job is running.");
 
       if (data.job_id) {
+        const loopStart = Date.now();
+        let lastContact = Date.now();
+
         while (true) {
           await sleep(3000);
 
+          // 总看门狗上限:超时仍未到终态,停止并明确判失败,绝不无限卡 waiting。
+          if (Date.now() - loopStart > FLASH_POLL_MAX_TOTAL_MS) {
+            setMessage(
+              "Firmware upgrade timed out: could not confirm the result within the expected time. Please check the device and its version manually.",
+            );
+            break;
+          }
+
           try {
             const status = await fetchFirmwareJob(data.job_id);
+            lastContact = Date.now();
             lastResponse = status;
 
             const nextResults = Array.isArray(status.results)
@@ -399,14 +420,27 @@ export default function FlashFirmware(): JSX.Element {
               break;
             }
           } catch (pollErr: unknown) {
-            const mainFlashStarted = hasACFlashStarted(lastResponse.results);
-
-            if (mainFlashStarted) {
+            // 已进入 AC 自刷阶段后断连 = 预期内的 AC 重启 → 进倒计时,别当失败。
+            if (
+              hasACFlashStarted(lastResponse.results) ||
+              lastResponse.status === "ac_rebooting"
+            ) {
               startACRebootCountdown();
               break;
             }
 
-            throw pollErr;
+            // 尚未到 AC 自刷就断连:可能是中途重启/网络波动。不首次就抛错冻结,
+            // 显示"重连中"继续有限重试;超过放弃阈值仍连不上 → 判无法确认/失败。
+            if (Date.now() - lastContact > FLASH_POLL_DISCONNECT_GIVEUP_MS) {
+              setMessage(
+                "Lost connection to the device during the upgrade and could not reconnect. It may be rebooting, or the upgrade may have failed — reconnect and re-check the version.",
+              );
+              break;
+            }
+
+            setMessage(
+              "Connection to the device was interrupted (it may be rebooting). Waiting to reconnect…",
+            );
           }
         }
       } else {
@@ -494,6 +528,98 @@ export default function FlashFirmware(): JSX.Element {
         </div>
       )}
 
+      {flashLogOpen && acRebootCountdown === null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
+            <div className="flex items-center gap-2 border-b px-5 py-4">
+              {flashing ? (
+                <RefreshCw className="h-5 w-5 animate-spin text-blue-600" />
+              ) : (
+                <PackageCheck className="h-5 w-5 text-blue-600" />
+              )}
+              <h3 className="text-lg font-semibold text-gray-900">
+                Firmware Upgrade
+              </h3>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {message && (
+                <div className="mb-4 rounded border border-blue-100 bg-blue-50 p-3 text-sm text-blue-700">
+                  {message}
+                </div>
+              )}
+
+              {visibleResults.length > 0 ? (
+                <div className="rounded border">
+                  <div className="border-b bg-gray-50 px-3 py-2 text-sm font-semibold">
+                    Progress
+                  </div>
+                  <div className="divide-y">
+                    {visibleResults.map((result, idx) => (
+                      <div
+                        key={`${result.role || "result"}-${result.stage || ""}-${result.ip || idx}`}
+                        className="flex items-center justify-between gap-3 px-3 py-2 text-sm"
+                      >
+                        <div className="min-w-0">
+                          <div className="font-medium">{resultLabel(result)}</div>
+                          {result.version && (
+                            <div className="font-mono text-xs text-gray-500">
+                              {result.version}
+                            </div>
+                          )}
+                          {result.detail && (
+                            <div className="mt-1 break-words text-xs text-gray-500">
+                              {result.detail}
+                            </div>
+                          )}
+                          {result.error && (
+                            <div className="mt-1 break-words text-xs text-red-600">
+                              {result.error}
+                            </div>
+                          )}
+                        </div>
+
+                        {result.status === "running" ? (
+                          <span className="flex shrink-0 items-center gap-1 rounded bg-blue-100 px-2 py-1 text-xs text-blue-700">
+                            <RefreshCw className="h-3 w-3 animate-spin" />
+                            Working
+                          </span>
+                        ) : result.status === "failed" || !result.ok ? (
+                          <span className="flex shrink-0 items-center gap-1 rounded bg-red-100 px-2 py-1 text-xs text-red-700">
+                            <XCircle className="h-3 w-3" />
+                            Failed
+                          </span>
+                        ) : (
+                          <span className="flex shrink-0 items-center gap-1 rounded bg-green-100 px-2 py-1 text-xs text-green-700">
+                            <CheckCircle className="h-3 w-3" />
+                            OK
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-sm text-gray-500">Starting…</div>
+              )}
+            </div>
+
+            <div className="border-t bg-gray-50 px-5 py-4">
+              {flashing ? (
+                <p className="text-center text-sm text-gray-500">
+                  Upgrade in progress — please do not close this window or power
+                  off the device.
+                </p>
+              ) : (
+                <div className="flex justify-end">
+                  <Button onClick={() => setFlashLogOpen(false)}>Confirm</Button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="mx-auto max-w-6xl">
         <div className="mb-8">
           <h2 className="text-3xl font-bold text-gray-900">Firmware Upgrade</h2>
@@ -502,7 +628,7 @@ export default function FlashFirmware(): JSX.Element {
           </p>
         </div>
 
-        {message && (
+        {!flashLogOpen && message && (
           <div className="mb-6 rounded border border-blue-100 bg-blue-50 p-3 text-sm text-blue-700">
             {message}
           </div>
@@ -547,65 +673,6 @@ export default function FlashFirmware(): JSX.Element {
               Flash LRAP Firmware Package
             </Button>
 
-            {flashing && (
-              <div className="rounded-md border border-amber-100 bg-amber-50 p-3 text-sm text-amber-800">
-                Upload has returned. This page is polling the background upgrade
-                job every few seconds.
-              </div>
-            )}
-
-            {visibleResults.length > 0 && (
-              <div className="mt-4 rounded border">
-                <div className="border-b bg-gray-50 px-3 py-2 text-sm font-semibold">
-                  Firmware Upgrade Results
-                </div>
-
-                <div className="divide-y">
-                  {visibleResults.map((result, idx) => (
-                    <div
-                      key={`${result.role || "result"}-${result.stage || ""}-${result.ip || idx}`}
-                      className="flex items-center justify-between gap-3 px-3 py-2 text-sm"
-                    >
-                      <div className="min-w-0">
-                        <div className="font-medium">{resultLabel(result)}</div>
-                        {result.version && (
-                          <div className="font-mono text-xs text-gray-500">
-                            {result.version}
-                          </div>
-                        )}
-                        {result.detail && (
-                          <div className="mt-1 break-words text-xs text-gray-500">
-                            {result.detail}
-                          </div>
-                        )}
-                        {result.error && (
-                          <div className="mt-1 break-words text-xs text-red-600">
-                            {result.error}
-                          </div>
-                        )}
-                      </div>
-
-                      {result.status === "running" ? (
-                        <span className="flex shrink-0 items-center gap-1 rounded bg-blue-100 px-2 py-1 text-xs text-blue-700">
-                          <RefreshCw className="h-3 w-3 animate-spin" />
-                          Waiting
-                        </span>
-                      ) : result.status === "failed" || !result.ok ? (
-                        <span className="flex shrink-0 items-center gap-1 rounded bg-red-100 px-2 py-1 text-xs text-red-700">
-                          <XCircle className="h-3 w-3" />
-                          Failed
-                        </span>
-                      ) : (
-                        <span className="flex shrink-0 items-center gap-1 rounded bg-green-100 px-2 py-1 text-xs text-green-700">
-                          <CheckCircle className="h-3 w-3" />
-                          OK
-                        </span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </CardContent>
         </Card>
       </div>
