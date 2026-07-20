@@ -484,7 +484,6 @@ export default function StaticRoutes(): JSX.Element {
                   <label className="mb-0.5 block text-[10px] text-gray-500">Gateway</label>
                   <input
                     type="text"
-                    placeholder="10.10.18.254"
                     className="w-full rounded border-gray-300 px-2 py-1 text-xs focus:border-blue-500 focus:ring-blue-500"
                     value={form.gateway}
                     onChange={(e) => handleFormChange('gateway', e.target.value)}
