@@ -901,72 +901,163 @@ func firmwarePrecheckAPsAndUpdateJob(jobID string, targetIPs []string) ([]firmwa
 	return states, allOK
 }
 
+// firmwareWaitForAPsAndUpdateJob 验证 AP 是否都刷成功。**不再盯每台烧录前的固定 IP**
+// (那样在"4 格池 + AP MAC 随机化"下会因鬼影租约占格而假失败),改为**池级按数量**验证:
+//   - 成功 = rbap 池(.2-.5)里有 expected 台"可达 + 版本匹配 + 确实重启过(boot_id 不在
+//     烧录前那组里)"的 AP。
+//   - 若池已满且有"持续不可达、且未验证"的 leased IP → 判为疑似鬼影,限频清掉其租约,
+//     腾出格子让被锁住的 AP 重新拿 IP。(复用已验证的 firmwareClearLocalDHCPLeasesForIPs。)
+//   - 到 timeout 仍不足 expected → 失败(真变砖也走这条,不会误判成功)。
+// 返回值语义与调用方一致:全 OK 表示成功;含任一 !OK 表示失败(调用方据此中止刷 AC)。
 func firmwareWaitForAPsAndUpdateJob(jobID string, states []firmwareAPUpgradeState, expectedVersion string, timeout time.Duration) []FirmwareFlashResult {
-	results := make([]FirmwareFlashResult, len(states))
-	var wg sync.WaitGroup
+	expected := len(states)
+	poolIPs := APManagementIPs()
 
-	var mu sync.Mutex
-	completed := 0
-	verified := 0
-	total := len(states)
-
+	preBootIDs := make(map[string]bool)
 	for _, st := range states {
-		firmwareAppendJobResult(jobID, FirmwareFlashResult{
-			IP:     st.IP,
-			Role:   "sub",
-			Stage:  "wait",
-			Status: "running",
-			OK:     true,
-			Detail: "Waiting for this AP to reboot and report the package version.",
+		if b := strings.TrimSpace(st.BeforeBootID); b != "" {
+			preBootIDs[b] = true
+		}
+	}
+
+	const (
+		ghostUnreachableFor = 30 * time.Second // 持续不可达多久才判疑似鬼影
+		ghostClearCooldown  = 60 * time.Second // 同一 IP 两次清理的最小间隔
+		pollInterval        = 5 * time.Second
+	)
+
+	unreachableSince := make(map[string]time.Time) // ip -> 首次持续不可达时间
+	lastCleared := make(map[string]time.Time)      // ip -> 上次清鬼影时间
+	verified := make(map[string]string)            // ip -> 已确认的版本
+
+	firmwareUpdateJob(jobID, "running",
+		fmt.Sprintf("Waiting for antennas to reboot and report the new version. 0/%d verified.", expected),
+		true, false)
+
+	deadline := time.Now().Add(timeout)
+	// 给 AP 一点启动时间再开始判定(与旧逻辑一致)。
+	time.Sleep(10 * time.Second)
+
+	for time.Now().Before(deadline) {
+		leased := firmwarePoolLeasedIPs(poolIPs)
+		now := time.Now()
+
+		for _, ip := range poolIPs {
+			if _, ok := verified[ip]; ok {
+				continue
+			}
+
+			if !firmwarePingOnce(ip) {
+				if unreachableSince[ip].IsZero() {
+					unreachableSince[ip] = now
+				}
+				continue
+			}
+			delete(unreachableSince, ip) // 可达了,重置持续不可达计时
+
+			version, verr := firmwareReadRemoteLRAPVersion(ip)
+			if verr != nil || !firmwareVersionMatches(version, expectedVersion) {
+				continue
+			}
+			// 必须"这次真重启过":boot_id 不在烧录前那组里,防止重刷同名版本时
+			// 一台没真重刷的 AP 因版本号相同被误算成功。
+			bootID := strings.TrimSpace(firmwareReadRemoteTextIgnoreErr(ip, "/proc/sys/kernel/random/boot_id"))
+			if bootID == "" || preBootIDs[bootID] {
+				continue
+			}
+
+			verified[ip] = version
+			firmwareAppendJobResult(jobID, FirmwareFlashResult{
+				IP: ip, Role: "sub", Stage: "verify", Status: "ok", OK: true, Version: version,
+			})
+		}
+
+		firmwareUpdateJob(jobID, "running",
+			fmt.Sprintf("Verifying antennas: %d/%d confirmed on the new version.", len(verified), expected),
+			true, false)
+
+		if len(verified) >= expected {
+			break
+		}
+
+		// 池满 + 有"持续不可达、且未验证"的 leased IP → 疑似鬼影,限频清掉腾格子。
+		if len(leased) >= len(poolIPs) {
+			for _, ip := range poolIPs {
+				if _, ok := verified[ip]; ok || !leased[ip] {
+					continue
+				}
+				since, seen := unreachableSince[ip]
+				if !seen || now.Sub(since) < ghostUnreachableFor {
+					continue
+				}
+				if last, ok := lastCleared[ip]; ok && now.Sub(last) < ghostClearCooldown {
+					continue
+				}
+				lastCleared[ip] = now
+				if _, err := firmwareClearLocalDHCPLeasesForIPs([]string{ip}); err == nil {
+					delete(unreachableSince, ip) // 给它重新拿 IP 的机会
+					firmwareAppendJobResult(jobID, FirmwareFlashResult{
+						IP: ip, Role: "sub", Stage: "verify", Status: "running", OK: true,
+						Detail: fmt.Sprintf("%s was leased but unreachable; cleared a stale (ghost) lease so the antenna can re-acquire an address.", ip),
+					})
+				}
+			}
+		}
+
+		time.Sleep(pollInterval)
+	}
+
+	results := make([]FirmwareFlashResult, 0, expected+1)
+	for ip, ver := range verified {
+		results = append(results, FirmwareFlashResult{
+			IP: ip, Role: "sub", Stage: "verify", Status: "ok", OK: true, Version: ver,
 		})
 	}
 
-	for i, st := range states {
-		i := i
-		st := st
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-
-			version, err := firmwareWaitAPUpgradeComplete(st.IP, expectedVersion, st.BeforeBootID, timeout)
-			result := FirmwareFlashResult{
-				IP:      st.IP,
-				Role:    "sub",
-				Stage:   "verify",
-				Status:  "ok",
-				OK:      err == nil,
-				Version: version,
-			}
-			if err != nil {
-				result.Status = "failed"
-				result.Error = err.Error()
-			}
-
-			results[i] = result
-			firmwareAppendJobResult(jobID, result)
-
-			mu.Lock()
-			completed++
-			if result.OK {
-				verified++
-			}
-			message := fmt.Sprintf("Waiting for AP verification: %d/%d completed, %d/%d verified OK.", completed, total, verified, total)
-			if completed == total {
-				if verified == total {
-					message = fmt.Sprintf("All AP modules verified successfully: %d/%d OK.", verified, total)
-				} else {
-					message = fmt.Sprintf("AP verification finished with failures: %d/%d OK.", verified, total)
-				}
-			}
-			mu.Unlock()
-
-			firmwareUpdateJob(jobID, "running", message, true, false)
-		}()
+	if len(verified) >= expected {
+		firmwareUpdateJob(jobID, "running",
+			fmt.Sprintf("All %d antennas verified on the new version.", expected), true, false)
+		return results
 	}
 
-	wg.Wait()
+	firmwareUpdateJob(jobID, "running",
+		fmt.Sprintf("Antenna verification failed: only %d/%d confirmed on the new version before timeout.", len(verified), expected),
+		true, false)
+	results = append(results, FirmwareFlashResult{
+		Role: "sub", Stage: "verify", Status: "failed", OK: false,
+		Error: fmt.Sprintf("only %d/%d antennas verified on the new version before timeout", len(verified), expected),
+	})
 	return results
+}
+
+// firmwarePoolLeasedIPs 返回 poolIPs 中当前在 /tmp/dhcp.leases 里有租约的那些 IP。
+func firmwarePoolLeasedIPs(poolIPs []string) map[string]bool {
+	inPool := make(map[string]bool, len(poolIPs))
+	for _, ip := range poolIPs {
+		inPool[ip] = true
+	}
+
+	leased := make(map[string]bool)
+	raw, err := os.ReadFile("/tmp/dhcp.leases")
+	if err != nil {
+		return leased
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) >= 3 && inPool[fields[2]] {
+			leased[fields[2]] = true
+		}
+	}
+	return leased
+}
+
+// firmwareReadRemoteTextIgnoreErr 是 firmwareReadRemoteText 的便捷封装(出错返回空串)。
+func firmwareReadRemoteTextIgnoreErr(ip, path string) string {
+	text, err := firmwareReadRemoteText(ip, path)
+	if err != nil {
+		return ""
+	}
+	return text
 }
 
 func firmwareWaitBeforeDHCPLeaseCleanup(jobID string, states []firmwareAPUpgradeState, minWait time.Duration, maxWait time.Duration) FirmwareFlashResult {
@@ -1033,72 +1124,6 @@ func firmwareWaitBeforeDHCPLeaseCleanup(jobID string, states []firmwareAPUpgrade
 		OK:     true,
 		Detail: detail,
 	}
-}
-
-func firmwareWaitAPUpgradeComplete(ip string, expectedVersion string, beforeBootID string, timeout time.Duration) (string, error) {
-	deadline := time.Now().Add(timeout)
-	lastErr := ""
-	seenReboot := false
-	seenOffline := false
-
-	// Give the AP time to start the delayed worker. Do not accept an already-matching
-	// /etc/lrap.version as success here; this function requires evidence that the AP
-	// actually rebooted during this upgrade attempt.
-	time.Sleep(10 * time.Second)
-
-	lastLogCheck := time.Time{}
-
-	for time.Now().Before(deadline) {
-		if time.Since(lastLogCheck) > 30*time.Second {
-			lastLogCheck = time.Now()
-			if logText, logErr := firmwareReadRemoteText(ip, "/tmp/lrap-firmware-upgrade.log"); logErr == nil && strings.TrimSpace(logText) != "" {
-				lastErr = "AP worker log: " + firmwareShortText(logText, 700)
-			}
-		}
-
-		if !firmwarePingOnce(ip) {
-			seenOffline = true
-			lastErr = "AP is not pingable yet"
-			time.Sleep(5 * time.Second)
-			continue
-		}
-
-		bootID, bootErr := firmwareReadRemoteText(ip, "/proc/sys/kernel/random/boot_id")
-		if bootErr == nil && beforeBootID != "" && bootID != "" && bootID != beforeBootID {
-			seenReboot = true
-		}
-
-		version, versionErr := firmwareReadRemoteLRAPVersion(ip)
-		if versionErr != nil {
-			lastErr = versionErr.Error()
-			time.Sleep(5 * time.Second)
-			continue
-		}
-
-		if firmwareVersionMatches(version, expectedVersion) {
-			if seenReboot {
-				return version, nil
-			}
-
-			if beforeBootID == "" && seenOffline {
-				// Fallback for images/ACLs where boot_id could not be captured before dispatch.
-				// Still requires that the AP disappeared at least once after dispatch.
-				return version, nil
-			}
-
-			lastErr = "version matches, but this upgrade attempt has not shown a reboot yet"
-		} else {
-			lastErr = fmt.Sprintf("current version %q does not match expected %q", version, expectedVersion)
-		}
-
-		time.Sleep(5 * time.Second)
-	}
-
-	if lastErr == "" {
-		lastErr = "timeout"
-	}
-
-	return "", fmt.Errorf("AP %s did not verify before timeout: %s", ip, lastErr)
 }
 
 func firmwareVersionMatches(actual string, expected string) bool {
