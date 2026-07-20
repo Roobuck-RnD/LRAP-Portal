@@ -1469,7 +1469,10 @@ func firmwareDownloadHandler(w http.ResponseWriter, r *http.Request) {
 
 func firmwareStartLocalSysupgrade(path string, keepSettings bool) {
 	go func() {
-		time.Sleep(1500 * time.Millisecond)
+		// 调用方已把 job 状态置为 ac_rebooting。这里延迟 ~12s 再真正触发重启,
+		// 给前端(每 3s 轮询一次)足够机会读到 ac_rebooting 那一帧并进入倒计时,
+		// 否则 AC 立刻重启会让前端漏帧、进度页卡在某个 AP 的 waiting。
+		time.Sleep(12 * time.Second)
 
 		args := []string{}
 		if !keepSettings {

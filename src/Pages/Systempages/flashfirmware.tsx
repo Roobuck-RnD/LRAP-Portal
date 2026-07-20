@@ -56,6 +56,12 @@ type FlashResponse = {
 
 const AC_UPGRADE_REBOOT_DELAY = 240;
 
+// 轮询进度的兜底上限,防止进度页无限卡在 waiting。
+// 总上限 > 后端每 AP 8 分钟验证超时 + AC 重启预算。
+const FLASH_POLL_MAX_TOTAL_MS = 15 * 60 * 1000;
+// 尚未进入 AC 自刷阶段就断连:重试这么久仍连不上 → 判为无法确认/失败,不再干等。
+const FLASH_POLL_DISCONNECT_GIVEUP_MS = 90 * 1000;
+
 type FirmwarePickerProps = {
   file: File | null;
   disabled?: boolean;
@@ -374,11 +380,23 @@ export default function FlashFirmware(): JSX.Element {
       setMessage(data.message || "Package accepted. Upgrade job is running.");
 
       if (data.job_id) {
+        const loopStart = Date.now();
+        let lastContact = Date.now();
+
         while (true) {
           await sleep(3000);
 
+          // 总看门狗上限:超时仍未到终态,停止并明确判失败,绝不无限卡 waiting。
+          if (Date.now() - loopStart > FLASH_POLL_MAX_TOTAL_MS) {
+            setMessage(
+              "Firmware upgrade timed out: could not confirm the result within the expected time. Please check the device and its version manually.",
+            );
+            break;
+          }
+
           try {
             const status = await fetchFirmwareJob(data.job_id);
+            lastContact = Date.now();
             lastResponse = status;
 
             const nextResults = Array.isArray(status.results)
@@ -399,14 +417,27 @@ export default function FlashFirmware(): JSX.Element {
               break;
             }
           } catch (pollErr: unknown) {
-            const mainFlashStarted = hasACFlashStarted(lastResponse.results);
-
-            if (mainFlashStarted) {
+            // 已进入 AC 自刷阶段后断连 = 预期内的 AC 重启 → 进倒计时,别当失败。
+            if (
+              hasACFlashStarted(lastResponse.results) ||
+              lastResponse.status === "ac_rebooting"
+            ) {
               startACRebootCountdown();
               break;
             }
 
-            throw pollErr;
+            // 尚未到 AC 自刷就断连:可能是中途重启/网络波动。不首次就抛错冻结,
+            // 显示"重连中"继续有限重试;超过放弃阈值仍连不上 → 判无法确认/失败。
+            if (Date.now() - lastContact > FLASH_POLL_DISCONNECT_GIVEUP_MS) {
+              setMessage(
+                "Lost connection to the device during the upgrade and could not reconnect. It may be rebooting, or the upgrade may have failed — reconnect and re-check the version.",
+              );
+              break;
+            }
+
+            setMessage(
+              "Connection to the device was interrupted (it may be rebooting). Waiting to reconnect…",
+            );
           }
         }
       } else {
