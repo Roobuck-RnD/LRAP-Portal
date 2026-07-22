@@ -17,12 +17,6 @@ import { useCurrentAllModuleStore } from "@/states/allModuleState";
 import { apiFetch } from "@/utils/http";
 import { confirmDialog } from "@/components/ui/confirm";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 
 type Module = {
   name: string;
@@ -163,11 +157,14 @@ function FirmwarePicker({
   };
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       <div>
-        <label className="block text-sm font-medium text-gray-700">
-          LRAP firmware package
-        </label>
+        <h3 className="font-display text-base font-semibold tracking-tight text-foreground">
+          Firmware package
+        </h3>
+        <p className="mt-0.5 text-sm text-muted-foreground">
+          Select the package file, then start the flash.
+        </p>
       </div>
 
       <input
@@ -184,32 +181,32 @@ function FirmwarePicker({
           type="button"
           onClick={openPicker}
           disabled={disabled}
-          className="flex w-full cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-300 bg-gray-50 px-6 py-10 text-center transition hover:border-blue-400 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex w-full cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-muted/40 px-6 py-12 text-center transition hover:border-primary/50 hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <div className="mb-3 rounded-full bg-white p-3 shadow-sm">
-            <FileUp className="h-7 w-7 text-blue-600" />
+          <div className="mb-3 rounded-full bg-card p-3 shadow-sm">
+            <FileUp className="h-7 w-7 text-primary" />
           </div>
 
-          <div className="text-sm font-semibold text-gray-800">
+          <div className="text-sm font-semibold text-foreground">
             Click to select LRAP firmware package
           </div>
 
-          <div className="mt-1 text-xs text-gray-500">
+          <div className="mt-1 text-xs text-muted-foreground">
             Supported: lrap-fw-*.bin
           </div>
         </button>
       ) : (
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-4">
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-primary/30 bg-primary/10 px-4 py-4">
           <div className="flex min-w-0 items-center gap-3">
-            <div className="shrink-0 rounded-lg bg-white p-2 shadow-sm">
-              <FileArchive className="h-6 w-6 text-blue-600" />
+            <div className="shrink-0 rounded-lg bg-card p-2 shadow-sm">
+              <FileArchive className="h-6 w-6 text-primary" />
             </div>
 
             <div className="min-w-0">
-              <div className="truncate text-sm font-semibold text-gray-900">
+              <div className="truncate text-sm font-semibold text-foreground">
                 {file.name}
               </div>
-              <div className="mt-0.5 text-xs text-gray-500">
+              <div className="mt-0.5 text-xs text-muted-foreground">
                 {formatFileSize(file.size)}
               </div>
             </div>
@@ -230,7 +227,7 @@ function FirmwarePicker({
               size="sm"
               onClick={clearFile}
               disabled={disabled}
-              className="border-red-200 text-red-600 hover:bg-red-50"
+              className="border-destructive/30 text-destructive hover:bg-destructive/10"
             >
               <X className="h-4 w-4" />
             </Button>
@@ -466,7 +463,7 @@ export default function FlashFirmware(): JSX.Element {
     <div className="relative w-full p-6">
       {acRebootCountdown !== null && (
         <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/80 backdrop-blur-sm transition-all">
-          <div className="flex w-full max-w-md flex-col items-center rounded-xl bg-white p-8 text-center shadow-2xl">
+          <div className="flex w-full max-w-md flex-col items-center rounded-xl bg-card p-8 text-center shadow-2xl">
             <div className="relative mb-6 flex items-center justify-center">
               <svg className="h-32 w-32 -rotate-90 transform">
                 <circle
@@ -476,7 +473,7 @@ export default function FlashFirmware(): JSX.Element {
                   stroke="currentColor"
                   strokeWidth="8"
                   fill="transparent"
-                  className="text-gray-200"
+                  className="text-muted-foreground/40"
                 />
                 <circle
                   cx="64"
@@ -489,24 +486,24 @@ export default function FlashFirmware(): JSX.Element {
                   strokeDashoffset={
                     circumference - (acRebootProgress / 100) * circumference
                   }
-                  className="text-blue-600 transition-all duration-1000 ease-linear"
+                  className="text-primary transition-all duration-1000 ease-linear"
                 />
               </svg>
 
               <div className="absolute flex flex-col items-center">
-                <Power className="mb-1 h-7 w-7 animate-pulse text-blue-600" />
-                <div className="text-2xl font-bold text-gray-800">
+                <Power className="mb-1 h-7 w-7 animate-pulse text-primary" />
+                <div className="text-2xl font-bold text-foreground">
                   {acRebootCountdown}s
                 </div>
               </div>
             </div>
 
-            <h3 className="mb-2 text-2xl font-bold text-gray-900">
+            <h3 className="mb-2 text-2xl font-bold text-foreground">
               Upgrade Started
             </h3>
 
-            <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 p-4 text-left">
-              <div className="flex items-start gap-2 text-sm text-blue-800">
+            <div className="mb-5 rounded-lg border border-primary/30 bg-primary/10 p-4 text-left">
+              <div className="flex items-start gap-2 text-sm text-primary">
                 <AlertTriangle className="h-5 w-5 shrink-0" />
                 <p>
                   The firmware upgrade is in progress. The portal and WiFi may
@@ -516,12 +513,12 @@ export default function FlashFirmware(): JSX.Element {
               </div>
             </div>
 
-            <p className="mb-3 text-sm text-gray-600">
+            <p className="mb-3 text-sm text-muted-foreground">
               After the countdown finishes, reconnect to the LRAP WiFi if needed
               and log in again.
             </p>
 
-            <p className="text-sm font-semibold text-blue-700">
+            <p className="text-sm font-semibold text-primary">
               Redirecting to login in {acRebootCountdown}s...
             </p>
           </div>
@@ -529,29 +526,29 @@ export default function FlashFirmware(): JSX.Element {
       )}
 
       {flashLogOpen && acRebootCountdown === null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-          <div className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 p-4 backdrop-blur-sm">
+          <div className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-xl bg-card shadow-2xl">
             <div className="flex items-center gap-2 border-b px-5 py-4">
               {flashing ? (
-                <RefreshCw className="h-5 w-5 animate-spin text-blue-600" />
+                <RefreshCw className="h-5 w-5 animate-spin text-primary" />
               ) : (
-                <PackageCheck className="h-5 w-5 text-blue-600" />
+                <PackageCheck className="h-5 w-5 text-primary" />
               )}
-              <h3 className="text-lg font-semibold text-gray-900">
+              <h3 className="text-lg font-semibold text-foreground">
                 Firmware Upgrade
               </h3>
             </div>
 
             <div className="flex-1 overflow-y-auto px-5 py-4">
               {message && (
-                <div className="mb-4 rounded border border-blue-100 bg-blue-50 p-3 text-sm text-blue-700">
+                <div className="mb-4 rounded border border-primary/20 bg-primary/10 p-3 text-sm text-primary">
                   {message}
                 </div>
               )}
 
               {visibleResults.length > 0 ? (
                 <div className="rounded border">
-                  <div className="border-b bg-gray-50 px-3 py-2 text-sm font-semibold">
+                  <div className="border-b bg-muted px-3 py-2 text-sm font-semibold">
                     Progress
                   </div>
                   <div className="divide-y">
@@ -563,34 +560,34 @@ export default function FlashFirmware(): JSX.Element {
                         <div className="min-w-0">
                           <div className="font-medium">{resultLabel(result)}</div>
                           {result.version && (
-                            <div className="font-mono text-xs text-gray-500">
+                            <div className="font-mono text-xs text-muted-foreground">
                               {result.version}
                             </div>
                           )}
                           {result.detail && (
-                            <div className="mt-1 break-words text-xs text-gray-500">
+                            <div className="mt-1 break-words text-xs text-muted-foreground">
                               {result.detail}
                             </div>
                           )}
                           {result.error && (
-                            <div className="mt-1 break-words text-xs text-red-600">
+                            <div className="mt-1 break-words text-xs text-destructive">
                               {result.error}
                             </div>
                           )}
                         </div>
 
                         {result.status === "running" ? (
-                          <span className="flex shrink-0 items-center gap-1 rounded bg-blue-100 px-2 py-1 text-xs text-blue-700">
+                          <span className="flex shrink-0 items-center gap-1 rounded bg-primary/15 px-2 py-1 text-xs text-primary">
                             <RefreshCw className="h-3 w-3 animate-spin" />
                             Working
                           </span>
                         ) : result.status === "failed" || !result.ok ? (
-                          <span className="flex shrink-0 items-center gap-1 rounded bg-red-100 px-2 py-1 text-xs text-red-700">
+                          <span className="flex shrink-0 items-center gap-1 rounded bg-destructive/15 px-2 py-1 text-xs text-destructive">
                             <XCircle className="h-3 w-3" />
                             Failed
                           </span>
                         ) : (
-                          <span className="flex shrink-0 items-center gap-1 rounded bg-green-100 px-2 py-1 text-xs text-green-700">
+                          <span className="flex shrink-0 items-center gap-1 rounded bg-success/15 px-2 py-1 text-xs text-success">
                             <CheckCircle className="h-3 w-3" />
                             OK
                           </span>
@@ -600,13 +597,13 @@ export default function FlashFirmware(): JSX.Element {
                   </div>
                 </div>
               ) : (
-                <div className="text-sm text-gray-500">Starting…</div>
+                <div className="text-sm text-muted-foreground">Starting…</div>
               )}
             </div>
 
-            <div className="border-t bg-gray-50 px-5 py-4">
+            <div className="border-t bg-muted px-5 py-4">
               {flashing ? (
-                <p className="text-center text-sm text-gray-500">
+                <p className="text-center text-sm text-muted-foreground">
                   Upgrade in progress — please do not close this window or power
                   off the device.
                 </p>
@@ -622,38 +619,30 @@ export default function FlashFirmware(): JSX.Element {
 
       <div className="mx-auto max-w-6xl">
         <div className="mb-8">
-          <h2 className="text-3xl font-bold text-gray-900">Firmware Upgrade</h2>
-          <p className="mt-1 text-gray-500">
+          <h2 className="text-3xl font-bold text-foreground">Firmware Upgrade</h2>
+          <p className="mt-1 text-muted-foreground">
             Upload one firmware package to update the device.
           </p>
         </div>
 
         {!flashLogOpen && message && (
-          <div className="mb-6 rounded border border-blue-100 bg-blue-50 p-3 text-sm text-blue-700">
+          <div className="mb-6 rounded border border-primary/20 bg-primary/10 p-3 text-sm text-primary">
             {message}
           </div>
         )}
 
-        <Card>
-          <CardHeader className="border-b bg-gray-50/50">
-            <div className="flex items-center gap-2">
-              <PackageCheck className="h-5 w-5 text-blue-600" />
-              <div>
-                <CardTitle>LRAP Firmware Package</CardTitle>
-              </div>
-            </div>
-          </CardHeader>
+        <div className="rounded-lg border border-border bg-card p-6">
+          <FirmwarePicker
+            file={bundleFile}
+            disabled={flashing || acRebootCountdown !== null}
+            onFileChange={setBundleFile}
+          />
 
-          <CardContent className="space-y-6 p-6">
-            <FirmwarePicker
-              file={bundleFile}
-              disabled={flashing || acRebootCountdown !== null}
-              onFileChange={setBundleFile}
-            />
-
-            <label className="flex items-center gap-2 text-sm text-gray-700">
+          <div className="mt-6 flex flex-col gap-4 border-t border-border pt-5 sm:flex-row sm:items-center sm:justify-between">
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-foreground">
               <input
                 type="checkbox"
+                className="size-4 accent-primary"
                 checked={keepSettings}
                 onChange={(e) => setKeepSettings(e.target.checked)}
                 disabled={flashing || acRebootCountdown !== null}
@@ -670,11 +659,10 @@ export default function FlashFirmware(): JSX.Element {
               ) : (
                 <Upload className="mr-2 h-4 w-4" />
               )}
-              Flash LRAP Firmware Package
+              Flash Firmware
             </Button>
-
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -1,13 +1,26 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
+/* Self-hosted fonts (device is offline — no CDN). Bundled into dist by Vite. */
+@import '@fontsource-variable/space-grotesk';
+@import '@fontsource/ibm-plex-sans/400.css';
+@import '@fontsource/ibm-plex-sans/500.css';
+@import '@fontsource/ibm-plex-sans/600.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: calc(var(--radius) - 1px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, 'Cascadia Code', monospace;
+  --font-display: 'Space Grotesk Variable', 'IBM Plex Sans', ui-sans-serif, sans-serif;
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -39,82 +52,186 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Roobuck signal / status palette — exposed as text-signal, bg-online, etc. */
+  --color-signal: var(--signal);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-online: var(--online);
+  --color-offline: var(--offline);
 }
 
+/*
+ * Roobuck NOC theme — a deep indigo operations console, not a black canvas.
+ * Layered surfaces (base -> card -> raised) carry depth; electric blue drives
+ * primary actions; signal cyan marks live/active data only, sparingly.
+ * The whole app runs dark (html.dark), so :root already holds the dark values
+ * and there is no light-mode flash on first paint.
+ */
 :root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
-}
+  --radius: 0.375rem;
 
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --background: #0a0f1a;   /* deep indigo-black base */
+  --foreground: #e6edf7;
+
+  --card: #111827;         /* brand slate — same family as the favicon mark */
+  --card-foreground: #e6edf7;
+  --popover: #141d2e;
+  --popover-foreground: #e6edf7;
+
+  --primary: #3b82f6;      /* electric blue — primary actions */
+  --primary-foreground: #f8fafc;
+  --secondary: #1a2437;
+  --secondary-foreground: #dce5f2;
+  --muted: #1a2437;
+  --muted-foreground: #8b97ad;
+  --accent: #1b2740;       /* hover surface, faint blue lift */
+  --accent-foreground: #f1f5fb;
+  --destructive: #f43f5e;
+
+  --border: #212c42;       /* hairline, a touch above the card */
+  --input: #212c42;
+  --ring: #3b82f6;
+
+  --chart-1: #3b82f6;      /* electric blue */
+  --chart-2: #22d3ee;      /* signal cyan */
+  --chart-3: #10b981;      /* online green */
+  --chart-4: #f59e0b;      /* amber */
+  --chart-5: #a78bfa;      /* violet accent */
+
+  --sidebar: #0b111e;      /* the console rail — sits below the base */
+  --sidebar-foreground: #c7d2e4;
+  --sidebar-primary: #3b82f6;
+  --sidebar-primary-foreground: #f8fafc;
+  --sidebar-accent: #18212f;
+  --sidebar-accent-foreground: #f1f5fb;
+  --sidebar-border: #1a2334;
+  --sidebar-ring: #3b82f6;
+
+  --signal: #22d3ee;       /* live / active data */
+  --success: #10b981;
+  --warning: #f59e0b;
+  --online: #10b981;
+  --offline: #64748b;
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
+
+  html {
+    color-scheme: dark;
+  }
+
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-sans antialiased;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Display face for headings — set with a little negative tracking so it
+     reads as a considered type treatment, not a default. */
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
+  }
+
+  /* Tighten default numerals so aligned data (IPs, counts, throughput) is legible. */
+  body {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--primary) 35%, transparent);
+    color: var(--foreground);
+  }
+
+  /* Native form controls default to the OS light theme in a dark UI. Give any
+     bare <select> (many pages use native selects) dark surfaces. Explicit Tailwind
+     bg/border classes still win via higher specificity, so styled controls are
+     unaffected — this only catches the unstyled ones. */
+  select:not([class*='bg-']) {
+    background-color: var(--input);
+    color: var(--foreground);
+    border-color: var(--border);
+  }
+  select option {
+    background-color: var(--popover);
+    color: var(--foreground);
+  }
+
+  /* Chrome forces a yellow background on autofilled fields, glaring in a dark
+     UI. background-color can't be overridden, so paint over it with a large
+     inset box-shadow (!important to beat the focus ring, also a box-shadow) and
+     set the text fill to the foreground. The 9999s transition defers repaint. */
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus,
+  input:-webkit-autofill:active {
+    -webkit-text-fill-color: var(--foreground) !important;
+    -webkit-box-shadow: 0 0 0 1000px var(--muted) inset !important;
+    box-shadow: 0 0 0 1000px var(--muted) inset !important;
+    caret-color: var(--foreground);
+    border-color: var(--border);
+    transition: background-color 9999s ease-in-out 0s;
+  }
+
+  /* Thin console scrollbars that match the surfaces. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--muted-foreground);
+    background-clip: content-box;
+  }
+}
+
+@layer components {
+  /* Monospaced technical values: IPs, MACs, throughput, IDs. */
+  .data {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+
+  /* Status dot with an optional live pulse. Pair .status-dot with a color,
+     e.g. text-online / text-offline / text-warning. */
+  .status-dot {
+    display: inline-block;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 9999px;
+    background: currentColor;
+    box-shadow: 0 0 0 3px color-mix(in oklab, currentColor 18%, transparent);
+  }
+  .status-dot--live {
+    animation: signal-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+}
+
+@keyframes signal-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, currentColor 45%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in oklab, currentColor 0%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot--live {
+    animation: none;
   }
 }

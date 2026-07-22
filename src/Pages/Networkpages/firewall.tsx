@@ -8,7 +8,6 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Shield,
-  RefreshCw,
   Plus,
   Trash2,
   Edit,
@@ -127,11 +126,11 @@ function boolText(v: boolean): string {
 function policyTone(policy: string): string {
   const p = String(policy || '').toLowerCase()
 
-  if (p === 'accept') return 'bg-green-100 text-green-700'
-  if (p === 'reject') return 'bg-amber-100 text-amber-700'
-  if (p === 'drop') return 'bg-red-100 text-red-700'
+  if (p === 'accept') return 'bg-success/15 text-success'
+  if (p === 'reject') return 'bg-warning/15 text-warning'
+  if (p === 'drop') return 'bg-destructive/15 text-destructive'
 
-  return 'bg-gray-100 text-gray-600'
+  return 'bg-muted text-muted-foreground'
 }
 
 function safeListText(value?: string[] | null): string {
@@ -144,7 +143,7 @@ function safeListText(value?: string[] | null): string {
 export default function Firewall(): JSX.Element {
   const [data, setData] = useState<FirewallResponse | null>(null)
   const [loading, setLoading] = useState(true)
-  const [backgroundLoading, setBackgroundLoading] = useState(false)
+  const [, setBackgroundLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -380,46 +379,33 @@ export default function Firewall(): JSX.Element {
       <div className="mx-auto max-w-6xl">
         <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-3xl font-bold text-gray-900">Firewall</h2>
-            <p className="mt-1 text-gray-500">
+            <h2 className="text-3xl font-bold text-foreground">Firewall</h2>
+            <p className="mt-1 text-muted-foreground">
               Firewall overview, basic toggles, and port forwarding rules.
             </p>
           </div>
-
-          <Button
-            variant="outline"
-            onClick={() => void fetchFirewall()}
-            disabled={loading || backgroundLoading || saving}
-          >
-            <RefreshCw
-              className={`mr-2 h-4 w-4 ${
-                loading || backgroundLoading || saving ? 'animate-spin' : ''
-              }`}
-            />
-            Refresh
-          </Button>
         </div>
 
         {error && (
-          <div className="mb-6 rounded border border-red-100 bg-red-50 p-3 text-sm text-red-600">
+          <div className="mb-6 rounded border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
             {error}
           </div>
         )}
 
         {loading && !data ? (
           <Card className="animate-pulse">
-            <CardHeader className="h-20 border-b bg-gray-50" />
+            <CardHeader className="h-20 border-b bg-muted" />
             <CardContent className="space-y-4 p-6">
-              <div className="h-24 rounded-md bg-gray-100" />
-              <div className="h-24 rounded-md bg-gray-100" />
+              <div className="h-24 rounded-md bg-muted" />
+              <div className="h-24 rounded-md bg-muted" />
             </CardContent>
           </Card>
         ) : data ? (
           <div className="space-y-6">
             <Card>
-              <CardHeader className="border-b bg-gray-50/50">
+              <CardHeader className="border-b border-border">
                 <div className="flex items-center gap-2">
-                  <Shield className="h-5 w-5 text-gray-700" />
+                  <Shield className="h-5 w-5 text-foreground" />
                   <div>
                     <CardTitle>Firewall Overview</CardTitle>
                     <CardDescription>
@@ -432,7 +418,7 @@ export default function Firewall(): JSX.Element {
               <CardContent className="p-4">
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <div className="rounded border p-4">
-                    <div className="mb-3 font-semibold text-gray-800">Global Defaults</div>
+                    <div className="mb-3 font-semibold text-foreground">Global Defaults</div>
 
                     <div className="space-y-3 text-sm">
                       <label className="flex items-center justify-between gap-3">
@@ -455,14 +441,14 @@ export default function Firewall(): JSX.Element {
 
                       <div className="flex items-center justify-between gap-3">
                         <span>Drop invalid packets</span>
-                        <span className="rounded bg-gray-100 px-2 py-1 text-xs text-gray-600">
+                        <span className="rounded bg-muted px-2 py-1 text-xs text-muted-foreground">
                           {boolText(data.defaults.drop_invalid)}
                         </span>
                       </div>
 
                       <div className="grid grid-cols-3 gap-2 pt-2">
                         <div>
-                          <div className="text-xs text-gray-400">Input</div>
+                          <div className="text-xs text-muted-foreground">Input</div>
                           <span
                             className={`rounded px-2 py-1 text-xs ${policyTone(
                               data.defaults.input
@@ -473,7 +459,7 @@ export default function Firewall(): JSX.Element {
                         </div>
 
                         <div>
-                          <div className="text-xs text-gray-400">Output</div>
+                          <div className="text-xs text-muted-foreground">Output</div>
                           <span
                             className={`rounded px-2 py-1 text-xs ${policyTone(
                               data.defaults.output
@@ -484,7 +470,7 @@ export default function Firewall(): JSX.Element {
                         </div>
 
                         <div>
-                          <div className="text-xs text-gray-400">Forward</div>
+                          <div className="text-xs text-muted-foreground">Forward</div>
                           <span
                             className={`rounded px-2 py-1 text-xs ${policyTone(
                               data.defaults.forward
@@ -509,11 +495,11 @@ export default function Firewall(): JSX.Element {
                   </div>
 
                   <div className="rounded border p-4">
-                    <div className="mb-3 font-semibold text-gray-800">Zones</div>
+                    <div className="mb-3 font-semibold text-foreground">Zones</div>
 
                     <div className="overflow-x-auto rounded border">
                       <table className="min-w-full text-left text-xs">
-                        <thead className="bg-gray-50 text-gray-500">
+                        <thead className="border-b border-border text-muted-foreground">
                           <tr>
                             <th className="px-3 py-2">Zone</th>
                             <th className="px-3 py-2">Networks</th>
@@ -528,7 +514,7 @@ export default function Firewall(): JSX.Element {
                         <tbody className="divide-y">
                           {data.zones.length === 0 ? (
                             <tr>
-                              <td colSpan={7} className="px-3 py-6 text-center text-gray-400">
+                              <td colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
                                 No zones found.
                               </td>
                             </tr>
@@ -554,10 +540,10 @@ export default function Firewall(): JSX.Element {
             </Card>
 
             <Card>
-              <CardHeader className="border-b bg-gray-50/50">
+              <CardHeader className="border-b border-border">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex items-center gap-2">
-                    <ShieldCheck className="h-5 w-5 text-blue-600" />
+                    <ShieldCheck className="h-5 w-5 text-primary" />
                     <div>
                       <CardTitle>Port Forwards</CardTitle>
                       <CardDescription>DNAT rules for forwarding traffic to another host.</CardDescription>
@@ -574,7 +560,7 @@ export default function Firewall(): JSX.Element {
               <CardContent className="p-4">
                 <div className="overflow-x-auto rounded border">
                   <table className="min-w-full text-left text-xs">
-                    <thead className="bg-gray-50 text-gray-500">
+                    <thead className="border-b border-border text-muted-foreground">
                       <tr>
                         <th className="px-3 py-2">Name</th>
                         <th className="px-3 py-2">Match</th>
@@ -588,20 +574,20 @@ export default function Firewall(): JSX.Element {
                     <tbody className="divide-y">
                       {data.port_forwards.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="px-3 py-8 text-center italic text-gray-400">
+                          <td colSpan={6} className="px-3 py-8 text-center italic text-muted-foreground">
                             No port forwards configured.
                           </td>
                         </tr>
                       ) : (
                         data.port_forwards.map((item) => (
-                          <tr key={item.section} className="hover:bg-gray-50">
+                          <tr key={item.section} className="hover:bg-muted">
                             <td className="px-3 py-2 font-semibold">
                               {item.name || item.section}
                             </td>
 
                             <td className="px-3 py-2 font-mono">
                               {item.src_dip || 'any'}:{item.src_dport || '-'}{' '}
-                              <span className="text-gray-400">({protoLabel(item.proto)})</span>
+                              <span className="text-muted-foreground">({protoLabel(item.proto)})</span>
                             </td>
 
                             <td className="px-3 py-2 font-mono">
@@ -614,11 +600,11 @@ export default function Firewall(): JSX.Element {
 
                             <td className="px-3 py-2">
                               {item.enabled ? (
-                                <span className="rounded bg-green-100 px-2 py-1 text-green-700">
+                                <span className="rounded bg-success/15 px-2 py-1 text-success">
                                   Enabled
                                 </span>
                               ) : (
-                                <span className="rounded bg-gray-100 px-2 py-1 text-gray-600">
+                                <span className="rounded bg-muted px-2 py-1 text-muted-foreground">
                                   Disabled
                                 </span>
                               )}
@@ -651,7 +637,7 @@ export default function Firewall(): JSX.Element {
                                 <Button
                                   variant="outline"
                                   size="sm"
-                                  className="border-red-200 text-red-600 hover:bg-red-50"
+                                  className="border-destructive/30 text-destructive hover:bg-destructive/10"
                                   onClick={() => void deleteForward(item)}
                                   disabled={saving}
                                 >
@@ -673,12 +659,12 @@ export default function Firewall(): JSX.Element {
 
       {isFormOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-          <div className="max-w-[94vw] overflow-hidden rounded-lg bg-white shadow-xl sm:w-[620px]">
-            <div className="border-b bg-gray-50 px-6 py-4">
-              <h3 className="text-lg font-semibold text-gray-900">
+          <div className="max-w-[94vw] overflow-hidden rounded-lg bg-card shadow-xl sm:w-[620px]">
+            <div className="border-b border-border px-6 py-4">
+              <h3 className="text-lg font-semibold text-foreground">
                 {formMode === 'create' ? 'Add Port Forward' : 'Edit Port Forward'}
               </h3>
-              <p className="text-sm text-gray-500">
+              <p className="text-sm text-muted-foreground">
                 Create a controlled DNAT rule.
               </p>
             </div>
@@ -699,7 +685,7 @@ export default function Firewall(): JSX.Element {
                   <select
                     value={form.proto}
                     onChange={(e) => setForm((p) => ({ ...p, proto: e.target.value }))}
-                    className="w-full rounded border bg-white px-3 py-2"
+                    className="w-full rounded border bg-card px-3 py-2"
                   >
                     <option value="tcp">TCP</option>
                     <option value="udp">UDP</option>
@@ -714,7 +700,7 @@ export default function Firewall(): JSX.Element {
                   <select
                     value={form.src}
                     onChange={(e) => setForm((p) => ({ ...p, src: e.target.value }))}
-                    className="w-full rounded border bg-white px-3 py-2"
+                    className="w-full rounded border bg-card px-3 py-2"
                   >
                     <option value="lan">lan</option>
                     <option value="wan">wan</option>
@@ -726,7 +712,7 @@ export default function Firewall(): JSX.Element {
                   <select
                     value={form.dest}
                     onChange={(e) => setForm((p) => ({ ...p, dest: e.target.value }))}
-                    className="w-full rounded border bg-white px-3 py-2"
+                    className="w-full rounded border bg-card px-3 py-2"
                   >
                     <option value="wan">wan</option>
                     <option value="lan">lan</option>
@@ -784,7 +770,7 @@ export default function Firewall(): JSX.Element {
               </label>
             </div>
 
-            <div className="flex justify-end gap-3 border-t bg-gray-50 px-6 py-4">
+            <div className="flex justify-end gap-3 border-t border-border px-6 py-4">
               <Button variant="outline" onClick={() => setIsFormOpen(false)} disabled={saving}>
                 Cancel
               </Button>

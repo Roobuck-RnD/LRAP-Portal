@@ -121,7 +121,7 @@ export function NavUser({
 
             <DropdownMenuItem
               onClick={handleLogout}
-              className="cursor-pointer text-red-600 focus:text-red-600"
+              className="cursor-pointer text-destructive focus:text-destructive"
             >
               <LogOut />
               Log out
@@ -132,10 +132,10 @@ export function NavUser({
 
       {showDevDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-          <div className="w-[90vw] max-w-sm overflow-hidden rounded-lg bg-white shadow-xl">
-            <div className="border-b bg-gray-50 px-6 py-4">
-              <h3 className="text-lg font-semibold text-gray-900">Developer Mode</h3>
-              <p className="mt-1 text-sm text-gray-500">
+          <div className="w-[90vw] max-w-sm overflow-hidden rounded-lg bg-card shadow-xl">
+            <div className="border-b bg-muted px-6 py-4">
+              <h3 className="text-lg font-semibold text-foreground">Developer Mode</h3>
+              <p className="mt-1 text-sm text-muted-foreground">
                 Enter the developer password to enable advanced details.
               </p>
             </div>
@@ -153,23 +153,23 @@ export function NavUser({
                   if (e.key === 'Enter') submitDevPassword()
                 }}
                 placeholder="Password"
-                className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
               />
               {pwError && (
-                <p className="text-xs text-red-600">Incorrect password.</p>
+                <p className="text-xs text-destructive">Incorrect password.</p>
               )}
             </div>
 
-            <div className="flex justify-end gap-3 border-t bg-gray-50 px-6 py-4">
+            <div className="flex justify-end gap-3 border-t bg-muted px-6 py-4">
               <button
                 onClick={closeDevDialog}
-                className="rounded border px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                className="rounded border px-4 py-2 text-sm text-foreground hover:bg-muted"
               >
                 Cancel
               </button>
               <button
                 onClick={submitDevPassword}
-                className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                className="rounded bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90"
               >
                 Enable
               </button>

@@ -454,8 +454,8 @@ export default function WiFiConfiguration(): JSX.Element {
           }}
           className={
             running
-              ? 'h-8 w-full justify-center bg-red-600 px-2 text-xs text-white hover:bg-red-700'
-              : 'h-8 w-full justify-center bg-green-600 px-2 text-xs text-white hover:bg-green-700'
+              ? 'h-8 w-full justify-center bg-destructive px-2 text-xs text-white hover:bg-destructive/90'
+              : 'h-8 w-full justify-center bg-success px-2 text-xs text-white hover:bg-success/90'
           }
           title={running ? `Disable ${label}` : `Enable ${label}`}
         >
@@ -561,20 +561,20 @@ export default function WiFiConfiguration(): JSX.Element {
       <div className="w-full overflow-x-hidden px-2 py-4 sm:px-4 lg:px-5">
         <div className="mx-auto w-full max-w-none">
           <div className="mb-4">
-            <div className="mb-3 h-9 w-72 animate-pulse rounded bg-gray-200" />
-            <div className="h-5 w-96 animate-pulse rounded bg-gray-100" />
+            <div className="mb-3 h-9 w-72 animate-pulse rounded bg-muted" />
+            <div className="h-5 w-96 animate-pulse rounded bg-muted" />
           </div>
 
           <Card>
             <CardHeader>
-              <div className="h-7 w-48 animate-pulse rounded bg-gray-200" />
-              <div className="h-4 w-72 animate-pulse rounded bg-gray-100" />
+              <div className="h-7 w-48 animate-pulse rounded bg-muted" />
+              <div className="h-4 w-72 animate-pulse rounded bg-muted" />
             </CardHeader>
             <CardContent className="px-3 pb-3 sm:px-4 sm:pb-4">
               <div className="space-y-4">
-                <div className="h-10 w-full animate-pulse rounded bg-gray-100" />
-                <div className="h-10 w-full animate-pulse rounded bg-gray-100" />
-                <div className="h-10 w-40 animate-pulse rounded bg-gray-200" />
+                <div className="h-10 w-full animate-pulse rounded bg-muted" />
+                <div className="h-10 w-full animate-pulse rounded bg-muted" />
+                <div className="h-10 w-40 animate-pulse rounded bg-muted" />
               </div>
             </CardContent>
           </Card>
@@ -587,14 +587,14 @@ export default function WiFiConfiguration(): JSX.Element {
     <div className="w-full overflow-x-hidden px-2 py-4 sm:px-4 lg:px-5">
       <div className="mx-auto w-full max-w-none">
         <div className="mb-4">
-          <h2 className="text-2xl font-bold text-gray-900">WiFi Configuration</h2>
+          <h2 className="text-2xl font-bold text-foreground">WiFi Configuration</h2>
         </div>
 
         <div className="grid gap-3">
           <Card>
             <CardHeader className="px-3 py-3 sm:px-4">
               <div className="flex items-center gap-1.5">
-                <Wifi className="h-5 w-5 text-blue-600" />
+                <Wifi className="h-5 w-5 text-primary" />
                 <div>
                   <CardTitle className="text-lg">WiFi Settings</CardTitle>
                 </div>
@@ -603,8 +603,8 @@ export default function WiFiConfiguration(): JSX.Element {
 
             <CardContent className="px-3 pb-3 sm:px-4 sm:pb-4">
               <div className="grid gap-3 md:grid-cols-2">
-                <div className="rounded border border-gray-100 p-3">
-                  <div className="mb-3 text-sm font-semibold text-gray-800">2.4GHz</div>
+                <div className="rounded border border-border p-3">
+                  <div className="mb-3 text-sm font-semibold text-foreground">2.4GHz</div>
 
                   <div className="grid gap-3">
                     <div className="grid gap-2">
@@ -639,7 +639,7 @@ export default function WiFiConfiguration(): JSX.Element {
                         <button
                           type="button"
                           onClick={() => setShow2g((v) => !v)}
-                          className="absolute inset-y-0 right-0 flex items-center px-3 text-gray-500 hover:text-gray-700"
+                          className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground hover:text-foreground"
                           aria-label={show2g ? 'Hide password' : 'Show password'}
                           tabIndex={-1}
                         >
@@ -650,8 +650,8 @@ export default function WiFiConfiguration(): JSX.Element {
                   </div>
                 </div>
 
-                <div className="rounded border border-gray-100 p-3">
-                  <div className="mb-3 text-sm font-semibold text-gray-800">5GHz</div>
+                <div className="rounded border border-border p-3">
+                  <div className="mb-3 text-sm font-semibold text-foreground">5GHz</div>
 
                   <div className="grid gap-3">
                     <div className="grid gap-2">
@@ -686,7 +686,7 @@ export default function WiFiConfiguration(): JSX.Element {
                         <button
                           type="button"
                           onClick={() => setShow5g((v) => !v)}
-                          className="absolute inset-y-0 right-0 flex items-center px-3 text-gray-500 hover:text-gray-700"
+                          className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground hover:text-foreground"
                           aria-label={show5g ? 'Hide password' : 'Show password'}
                           tabIndex={-1}
                         >
@@ -703,7 +703,7 @@ export default function WiFiConfiguration(): JSX.Element {
           <Card>
             <CardHeader className="px-3 py-3 sm:px-4">
               <div className="flex items-center gap-1.5">
-                <RadioTower className="h-5 w-5 text-purple-600" />
+                <RadioTower className="h-5 w-5 text-signal" />
                 <div>
                   <CardTitle className="text-lg">Radio Settings</CardTitle>
                 </div>
@@ -712,7 +712,7 @@ export default function WiFiConfiguration(): JSX.Element {
 
             <CardContent className="px-3 pb-3 sm:px-4 sm:pb-4">
               {(config.modules || []).length === 0 ? (
-                <div className="rounded border border-dashed p-4 text-center text-sm text-gray-500">
+                <div className="rounded border border-dashed p-4 text-center text-sm text-muted-foreground">
                   No devices found.
                 </div>
               ) : (
@@ -729,7 +729,7 @@ export default function WiFiConfiguration(): JSX.Element {
                       <col style={{ width: '7%' }} />
                       <col style={{ width: '11%' }} />
                     </colgroup>
-                    <thead className="border-b bg-gray-50 text-xs text-gray-500">
+                    <thead className="border-b border-border text-xs text-muted-foreground">
                       <tr>
                         <th rowSpan={2} className="px-1.5 py-2 text-left align-bottom">
                           Device
@@ -758,9 +758,9 @@ export default function WiFiConfiguration(): JSX.Element {
                         <tr key={`${mod.type}-${mod.ip || idx}`} className="border-b">
                           <td className="px-1.5 py-2">
                             <div className="flex items-center gap-1.5">
-                              <Settings2 className="h-4 w-4 text-gray-500" />
+                              <Settings2 className="h-4 w-4 text-muted-foreground" />
                               <div>
-                                <div className="font-medium text-gray-900">
+                                <div className="font-medium text-foreground">
                                   {mod.name || (mod.type === 'main' ? 'Router' : 'Antenna')}
                                 </div>
                               </div>
@@ -772,7 +772,7 @@ export default function WiFiConfiguration(): JSX.Element {
                               value={String(mod.channel_2g)}
                               disabled={saving}
                               onChange={(e) => updateModuleRadio(idx, { channel_2g: e.target.value })}
-                              className="w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-xs focus:border-blue-500 focus:outline-none"
+                              className="w-full rounded border border-border bg-card px-2 py-1.5 text-xs focus:border-ring focus:outline-none"
                             >
                               {channelOptions2G.map((opt) => (
                                 <option key={opt.value} value={opt.value}>
@@ -787,7 +787,7 @@ export default function WiFiConfiguration(): JSX.Element {
                               value={mod.channel_width_2g}
                               disabled={saving}
                               onChange={(e) => updateModuleRadio(idx, { channel_width_2g: e.target.value })}
-                              className="w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-xs focus:border-blue-500 focus:outline-none"
+                              className="w-full rounded border border-border bg-card px-2 py-1.5 text-xs focus:border-ring focus:outline-none"
                             >
                               {channelWidthOptions2G.map((opt) => (
                                 <option key={opt.value} value={opt.value}>
@@ -812,7 +812,7 @@ export default function WiFiConfiguration(): JSX.Element {
                                 }
                                 className="w-[76px] pr-2 text-right [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                               />
-                              <span className="text-[11px] text-gray-500">%</span>
+                              <span className="text-[11px] text-muted-foreground">%</span>
                             </div>
                           </td>
 
@@ -823,7 +823,7 @@ export default function WiFiConfiguration(): JSX.Element {
                               value={String(mod.channel_5g)}
                               disabled={saving}
                               onChange={(e) => updateModuleRadio(idx, { channel_5g: e.target.value })}
-                              className="w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-xs focus:border-blue-500 focus:outline-none"
+                              className="w-full rounded border border-border bg-card px-2 py-1.5 text-xs focus:border-ring focus:outline-none"
                             >
                               {channelOptions5G.map((opt) => (
                                 <option key={opt.value} value={opt.value}>
@@ -838,7 +838,7 @@ export default function WiFiConfiguration(): JSX.Element {
                               value={mod.channel_width_5g}
                               disabled={saving}
                               onChange={(e) => updateModuleRadio(idx, { channel_width_5g: e.target.value })}
-                              className="w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-xs focus:border-blue-500 focus:outline-none"
+                              className="w-full rounded border border-border bg-card px-2 py-1.5 text-xs focus:border-ring focus:outline-none"
                             >
                               {channelWidthOptions5G.map((opt) => (
                                 <option key={opt.value} value={opt.value}>
@@ -863,7 +863,7 @@ export default function WiFiConfiguration(): JSX.Element {
                                 }
                                 className="w-[76px] pr-2 text-right [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                               />
-                              <span className="text-[11px] text-gray-500">%</span>
+                              <span className="text-[11px] text-muted-foreground">%</span>
                             </div>
                           </td>
 
@@ -876,27 +876,27 @@ export default function WiFiConfiguration(): JSX.Element {
               )}
 
               {error && (
-                <div className="mt-4 flex gap-2 rounded border border-red-100 bg-red-50 p-3 text-sm text-red-600">
+                <div className="mt-4 flex gap-2 rounded border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
                   <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                   <span>{error}</span>
                 </div>
               )}
 
               {success && (
-                <div className="mt-4 flex gap-2 rounded border border-green-100 bg-green-50 p-3 text-sm text-green-700">
+                <div className="mt-4 flex gap-2 rounded border border-success/20 bg-success/10 p-3 text-sm text-success">
                   <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
                   <span>{success}</span>
                 </div>
               )}
 
               {syncResults.length > 0 && (
-                <div className="mt-4 rounded border border-gray-200 bg-gray-50 p-3">
-                  <div className="mb-2 text-sm font-medium text-gray-700">Sync result</div>
+                <div className="mt-4 rounded border border-border bg-muted p-3">
+                  <div className="mb-2 text-sm font-medium text-foreground">Sync result</div>
                   <div className="space-y-1 text-xs">
                     {syncResults.map((r) => (
                       <div
                         key={`${r.target}-${r.ip}`}
-                        className={r.ok ? 'text-green-700' : 'text-amber-700'}
+                        className={r.ok ? 'text-success' : 'text-warning'}
                       >
                         {r.ok ? '✓' : '!'} {r.target} {r.ip ? `(${r.ip})` : ''}{' '}
                         {r.ok ? 'updated' : r.error || 'failed'}
@@ -912,7 +912,6 @@ export default function WiFiConfiguration(): JSX.Element {
                     void handleSave()
                   }}
                   disabled={saving}
-                  className="bg-blue-600 text-white hover:bg-blue-700"
                 >
                   {saving ? (
                     'Applying...'
