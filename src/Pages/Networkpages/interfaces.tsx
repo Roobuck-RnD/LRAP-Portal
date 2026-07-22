@@ -12,7 +12,6 @@ import {
   AlertCircle,
   Network,
   Plus,
-  RefreshCw,
   ServerCog,
   Square,
   Trash2,
@@ -184,13 +183,13 @@ function joinList(value?: string[] | null): string {
 function interfaceTone(id: string): string {
   const lower = id.toLowerCase()
 
-  if (lower === 'lan') return 'bg-green-100 text-green-800 border-green-200'
-  if (lower === 'wan' || lower.includes('wan')) return 'bg-red-100 text-red-800 border-red-200'
-  if (lower.includes('vpn')) return 'bg-purple-100 text-purple-800 border-purple-200'
-  if (lower.includes('guest')) return 'bg-amber-100 text-amber-800 border-amber-200'
-  if (lower.includes('alias')) return 'bg-blue-100 text-blue-800 border-blue-200'
+  if (lower === 'lan') return 'bg-success/15 text-success border-success/30'
+  if (lower === 'wan' || lower.includes('wan')) return 'bg-destructive/15 text-destructive border-destructive/30'
+  if (lower.includes('vpn')) return 'bg-signal/15 text-signal border-signal/30'
+  if (lower.includes('guest')) return 'bg-warning/15 text-warning border-warning/30'
+  if (lower.includes('alias')) return 'bg-primary/15 text-primary border-primary/30'
 
-  return 'bg-slate-100 text-slate-800 border-slate-200'
+  return 'bg-muted text-muted-foreground border-border'
 }
 
 function delay(ms: number) {
@@ -217,7 +216,7 @@ export default function Interfaces(): JSX.Element {
   const [acIp, setAcIp] = useState('')
 
   const [loading, setLoading] = useState(true)
-  const [backgroundLoading, setBackgroundLoading] = useState(false)
+  const [, setBackgroundLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const [isAddOpen, setIsAddOpen] = useState(false)
@@ -564,26 +563,13 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
       <div className="mx-auto max-w-6xl">
         <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-3xl font-bold text-gray-900">Interfaces</h2>
-            <p className="mt-1 text-gray-500">
+            <h2 className="text-3xl font-bold text-foreground">Interfaces</h2>
+            <p className="mt-1 text-muted-foreground">
               Manage network interfaces and view antenna network settings.
             </p>
           </div>
 
           <div className="flex gap-2">
-            <Button
-              variant="outline"
-              onClick={() => void fetchInterfaces()}
-              disabled={loading || backgroundLoading || isSaving}
-            >
-              <RefreshCw
-                className={`mr-2 h-4 w-4 ${
-                  loading || backgroundLoading || isSaving ? 'animate-spin' : ''
-                }`}
-              />
-              Refresh
-            </Button>
-
             <Button onClick={() => setIsAddOpen(true)} disabled={isSaving}>
               <Plus className="mr-2 h-4 w-4" />
               Add Interface
@@ -592,27 +578,27 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
         </div>
 
         {error && (
-          <div className="mb-6 rounded border border-red-100 bg-red-50 p-3 text-sm text-red-600">
+          <div className="mb-6 rounded border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
             {error}
           </div>
         )}
 
         {loading && interfaces.length === 0 ? (
           <Card className="animate-pulse">
-            <CardHeader className="h-20 border-b bg-gray-50" />
+            <CardHeader className="h-20 border-b bg-muted" />
             <CardContent className="space-y-4 p-6">
-              <div className="h-24 rounded-md bg-gray-100" />
-              <div className="h-24 rounded-md bg-gray-100" />
-              <div className="h-24 rounded-md bg-gray-100" />
+              <div className="h-24 rounded-md bg-muted" />
+              <div className="h-24 rounded-md bg-muted" />
+              <div className="h-24 rounded-md bg-muted" />
             </CardContent>
           </Card>
         ) : (
           <div className="grid grid-cols-1 gap-6">
-            <Card className="border-gray-200 shadow-sm">
-              <CardHeader className="border-b bg-gray-50/50 pb-3">
+            <Card className="border-border shadow-sm">
+              <CardHeader className="border-b border-border pb-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <ServerCog className="h-5 w-5 text-gray-600" />
+                    <ServerCog className="h-5 w-5 text-muted-foreground" />
                     <div>
                       <CardTitle className="text-lg">
                         {acName || acModule?.name || 'Router'}
@@ -627,15 +613,15 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
 
               <CardContent className="p-0">
                 {interfaces.length === 0 ? (
-                  <div className="p-6 text-center text-gray-500">No interfaces found.</div>
+                  <div className="p-6 text-center text-muted-foreground">No interfaces found.</div>
                 ) : (
                   <div className="flex flex-col divide-y">
                     {interfaces.map((iface) => (
                       <div
                         key={iface.id}
-                        className="flex flex-col gap-6 p-4 transition-colors hover:bg-gray-50 md:flex-row md:items-center"
+                        className="flex flex-col gap-6 p-4 transition-colors hover:bg-muted md:flex-row md:items-center"
                       >
-                        <div className="w-36 shrink-0 overflow-hidden rounded-md border bg-white shadow-sm">
+                        <div className="w-36 shrink-0 overflow-hidden rounded-md border bg-card shadow-sm">
                           <div
                             className={`border-b px-2 py-1 text-center text-sm font-bold ${interfaceTone(
                               iface.id
@@ -645,92 +631,92 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
                           </div>
 
                           <div className="flex flex-col items-center justify-center p-3">
-                            <Network className="mb-1 h-6 w-6 text-gray-500" />
-                            <span className="max-w-[120px] truncate text-xs text-gray-500">
+                            <Network className="mb-1 h-6 w-6 text-muted-foreground" />
+                            <span className="max-w-[120px] truncate text-xs text-muted-foreground">
                               {iface.device || '-'}
                             </span>
                           </div>
                         </div>
 
-                        <div className="grid flex-grow grid-cols-1 gap-x-4 gap-y-1 text-sm text-gray-700 sm:grid-cols-2 lg:grid-cols-3">
+                        <div className="grid flex-grow grid-cols-1 gap-x-4 gap-y-1 text-sm text-foreground sm:grid-cols-2 lg:grid-cols-3">
                           <div>
-                            <span className="font-semibold text-gray-900">ID:</span>{' '}
+                            <span className="font-semibold text-foreground">ID:</span>{' '}
                             {iface.id || '-'}
                           </div>
 
                           <div>
-                            <span className="font-semibold text-gray-900">Protocol:</span>{' '}
+                            <span className="font-semibold text-foreground">Protocol:</span>{' '}
                             {iface.protocol || '-'}
                           </div>
 
                           <div>
-                            <span className="font-semibold text-gray-900">Status:</span>{' '}
+                            <span className="font-semibold text-foreground">Status:</span>{' '}
                             {iface.up ? (
-                              <span className="text-green-700">Up</span>
+                              <span className="text-success">Up</span>
                             ) : (
-                              <span className="text-gray-500">Down</span>
+                              <span className="text-muted-foreground">Down</span>
                             )}
                           </div>
 
                           <div>
-                            <span className="font-semibold text-gray-900">Uptime:</span>{' '}
+                            <span className="font-semibold text-foreground">Uptime:</span>{' '}
                             {formatUptime(iface.uptime)}
                           </div>
 
                           <div>
-                            <span className="font-semibold text-gray-900">MAC:</span>{' '}
+                            <span className="font-semibold text-foreground">MAC:</span>{' '}
                             <span className="font-mono">{iface.macaddr || '-'}</span>
                           </div>
 
                           <div>
-                            <span className="font-semibold text-gray-900">IPv4:</span>{' '}
+                            <span className="font-semibold text-foreground">IPv4:</span>{' '}
                             <span className="font-mono">{iface.ipv4 || '-'}</span>
                           </div>
 
                           <div>
-                            <span className="font-semibold text-gray-900">Netmask:</span>{' '}
+                            <span className="font-semibold text-foreground">Netmask:</span>{' '}
                             <span className="font-mono">{iface.netmask || '-'}</span>
                           </div>
 
                           <div>
-                            <span className="font-semibold text-gray-900">Gateway:</span>{' '}
+                            <span className="font-semibold text-foreground">Gateway:</span>{' '}
                             <span className="font-mono">{iface.gateway || '-'}</span>
                           </div>
 
                           <div>
-                            <span className="font-semibold text-gray-900">DNS:</span>{' '}
+                            <span className="font-semibold text-foreground">DNS:</span>{' '}
                             <span className="font-mono">{iface.dns || '-'}</span>
                           </div>
 
                           <div>
-                            <span className="font-semibold text-gray-900">Firewall Zone:</span>{' '}
+                            <span className="font-semibold text-foreground">Firewall Zone:</span>{' '}
                             {iface.firewall_zone || '-'}
                           </div>
 
                           {iface.id === 'lan' && iface.dhcp && (
                             <div>
-                              <span className="font-semibold text-gray-900">DHCP Server:</span>{' '}
+                              <span className="font-semibold text-foreground">DHCP Server:</span>{' '}
                               {iface.dhcp.enabled ? 'Enabled' : 'Disabled'}
                             </div>
                           )}
 
                           <div>
-                            <span className="font-semibold text-gray-900">Device:</span>{' '}
+                            <span className="font-semibold text-foreground">Device:</span>{' '}
                             {iface.device || '-'}
                           </div>
 
                           <div>
-                            <span className="font-semibold text-gray-900">Auto start:</span>{' '}
+                            <span className="font-semibold text-foreground">Auto start:</span>{' '}
                             {iface.auto ? 'Yes' : 'No'}
                           </div>
 
                           <div>
-                            <span className="font-semibold text-gray-900">RX:</span>{' '}
+                            <span className="font-semibold text-foreground">RX:</span>{' '}
                             {formatBytes(iface.rx_bytes)} ({iface.rx_pkts} Pkts.)
                           </div>
 
                           <div>
-                            <span className="font-semibold text-gray-900">TX:</span>{' '}
+                            <span className="font-semibold text-foreground">TX:</span>{' '}
                             {formatBytes(iface.tx_bytes)} ({iface.tx_pkts} Pkts.)
                           </div>
                         </div>
@@ -741,7 +727,6 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
                               <Button
                                 variant="default"
                                 size="sm"
-                                className="bg-blue-600 hover:bg-blue-700"
                                 onClick={() => handleOpenEdit(iface)}
                                 disabled={isSaving}
                               >
@@ -775,7 +760,7 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
                                 <Button
                                   variant="outline"
                                   size="sm"
-                                  className="border-red-200 text-red-600 hover:bg-red-50"
+                                  className="border-destructive/30 text-destructive hover:bg-destructive/10"
                                   onClick={() => void handleAction('delete', iface)}
                                   disabled={isSaving}
                                 >
@@ -785,7 +770,7 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
                               )}
                             </>
                           ) : (
-                            <span className="rounded bg-gray-100 px-2 py-1 text-xs text-gray-500">
+                            <span className="rounded bg-muted px-2 py-1 text-xs text-muted-foreground">
                               Read-only
                             </span>
                           )}
@@ -797,10 +782,10 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
               </CardContent>
             </Card>
 
-            <Card className="border-gray-200 shadow-sm">
-              <CardHeader className="border-b bg-gray-50/50 pb-3">
+            <Card className="border-border shadow-sm">
+              <CardHeader className="border-b border-border pb-3">
                 <div className="flex items-center gap-2">
-                  <Wifi className="h-5 w-5 text-blue-600" />
+                  <Wifi className="h-5 w-5 text-primary" />
                   <div>
                     <CardTitle className="text-lg">Antenna Network</CardTitle>
                   </div>
@@ -809,28 +794,28 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
 
               <CardContent className="p-4">
                 {apManagement.length === 0 ? (
-                  <div className="rounded border border-dashed p-6 text-center text-sm text-gray-500">
+                  <div className="rounded border border-dashed p-6 text-center text-sm text-muted-foreground">
                     No antennas found.
                   </div>
                 ) : (
-                  <div className="overflow-x-auto rounded border border-gray-200">
+                  <div className="overflow-x-auto rounded border border-border">
                     <table className="min-w-full text-left text-xs">
-                      <thead className="bg-gray-50 text-gray-500">
+                      <thead className="border-b border-border text-muted-foreground">
                         <tr>
                           <th className="px-3 py-2 font-medium">Antenna</th>
                           <th className="px-3 py-2 font-medium">Status</th>
                         </tr>
                       </thead>
 
-                      <tbody className="divide-y divide-gray-100">
+                      <tbody className="divide-y divide-border">
                         {apManagement.map((ap) => (
-                          <tr key={ap.ip || ap.name} className="hover:bg-gray-50">
+                          <tr key={ap.ip || ap.name} className="hover:bg-muted">
                             <td className="px-3 py-2">
-                              <div className="font-medium text-gray-800">
+                              <div className="font-medium text-foreground">
                                 {ap.name || 'Antenna'}
                               </div>
                               {devMode && (
-                                <div className="font-mono text-[11px] text-gray-400">
+                                <div className="font-mono text-[11px] text-muted-foreground">
                                   {ap.ip || '-'}
                                 </div>
                               )}
@@ -838,11 +823,11 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
 
                             <td className="px-3 py-2">
                               {ap.online ? (
-                                <span className="rounded bg-green-100 px-2 py-1 text-xs text-green-700">
+                                <span className="rounded bg-success/15 px-2 py-1 text-xs text-success">
                                   Online
                                 </span>
                               ) : (
-                                <span className="rounded bg-red-100 px-2 py-1 text-xs text-red-700">
+                                <span className="rounded bg-destructive/15 px-2 py-1 text-xs text-destructive">
                                   Offline
                                 </span>
                               )}
@@ -862,46 +847,46 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
 
       {isAddOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-          <div className="max-w-[92vw] overflow-hidden rounded-lg bg-white shadow-xl sm:w-[520px]">
-            <div className="border-b bg-gray-50 px-6 py-4">
-              <h3 className="text-lg font-semibold text-gray-900">Add New Interface</h3>
-              <p className="text-sm text-gray-500">
+          <div className="max-w-[92vw] overflow-hidden rounded-lg bg-card shadow-xl sm:w-[520px]">
+            <div className="border-b border-border px-6 py-4">
+              <h3 className="text-lg font-semibold text-foreground">Add New Interface</h3>
+              <p className="text-sm text-muted-foreground">
                 Create a safe LAN alias interface.
               </p>
             </div>
 
             <div className="space-y-4 p-6">
               <div className="space-y-1.5">
-                <label className="text-sm font-medium text-gray-700">Name</label>
+                <label className="text-sm font-medium text-foreground">Name</label>
                 <input
                   type="text"
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
-                  className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
                 />
-                <div className="text-xs text-gray-400">
+                <div className="text-xs text-muted-foreground">
                   Letters, numbers, and underscore only.
                 </div>
               </div>
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium text-gray-700">Protocol</label>
+                  <label className="text-sm font-medium text-foreground">Protocol</label>
                   <select
                     value="static"
                     disabled
-                    className="w-full rounded-md border bg-gray-100 px-3 py-2 text-gray-600"
+                    className="w-full rounded-md border bg-muted px-3 py-2 text-muted-foreground"
                   >
                     <option value="static">Static address</option>
                   </select>
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium text-gray-700">Device</label>
+                  <label className="text-sm font-medium text-foreground">Device</label>
                   <select
                     value="@lan"
                     disabled
-                    className="w-full rounded-md border bg-gray-100 px-3 py-2 text-gray-600"
+                    className="w-full rounded-md border bg-muted px-3 py-2 text-muted-foreground"
                   >
                     <option value="@lan">Alias Interface: "@lan"</option>
                   </select>
@@ -909,26 +894,26 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-sm font-medium text-gray-700">IPv4 Address</label>
+                <label className="text-sm font-medium text-foreground">IPv4 Address</label>
                 <input
                   type="text"
                   value={newIp}
                   onChange={(e) => setNewIp(e.target.value)}
-                  className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
                 />
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-sm font-medium text-gray-700">IPv4 Netmask</label>
+                <label className="text-sm font-medium text-foreground">IPv4 Netmask</label>
                 <input
                   type="text"
                   value={newMask}
                   onChange={(e) => setNewMask(e.target.value)}
-                  className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
                 />
               </div>
 
-              <label className="flex items-center gap-2 text-sm text-gray-700">
+              <label className="flex items-center gap-2 text-sm text-foreground">
                 <input
                   type="checkbox"
                   checked={newAuto}
@@ -938,7 +923,7 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
               </label>
             </div>
 
-            <div className="flex justify-end gap-3 border-t bg-gray-50 px-6 py-4">
+            <div className="flex justify-end gap-3 border-t border-border px-6 py-4">
               <Button
                 variant="outline"
                 onClick={() => {
@@ -960,12 +945,12 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
 
       {isEditOpen && editTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-          <div className="max-w-[92vw] overflow-hidden rounded-lg bg-white shadow-xl sm:w-[640px]">
-            <div className="border-b bg-gray-50 px-6 py-4">
-              <h3 className="text-lg font-semibold text-gray-900">
+          <div className="max-w-[92vw] overflow-hidden rounded-lg bg-card shadow-xl sm:w-[640px]">
+            <div className="border-b border-border px-6 py-4">
+              <h3 className="text-lg font-semibold text-foreground">
                 Edit {editTarget.name || editTarget.id}
               </h3>
-              <p className="text-sm text-gray-500">Modify safe interface settings.</p>
+              <p className="text-sm text-muted-foreground">Modify safe interface settings.</p>
             </div>
 
             <div className="border-b px-6 pt-4">
@@ -975,8 +960,8 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
                   onClick={() => setEditTab('general')}
                   className={`rounded-t-md border px-3 py-2 text-sm ${
                     editTab === 'general'
-                      ? 'border-b-white bg-white text-blue-700'
-                      : 'bg-gray-50 text-gray-600'
+                      ? 'border-b-border bg-card text-primary'
+                      : 'bg-muted text-muted-foreground'
                   }`}
                 >
                   General Settings
@@ -988,8 +973,8 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
                     onClick={() => setEditTab('dhcp')}
                     className={`rounded-t-md border px-3 py-2 text-sm ${
                       editTab === 'dhcp'
-                        ? 'border-b-white bg-white text-blue-700'
-                        : 'bg-gray-50 text-gray-600'
+                        ? 'border-b-border bg-card text-primary'
+                        : 'bg-muted text-muted-foreground'
                     }`}
                   >
                     DHCP Server
@@ -1000,7 +985,7 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
 
             <div className="space-y-4 p-6">
               {editTarget.id === 'lan' && (
-                <div className="flex items-start gap-2 rounded-md bg-amber-50 p-3 text-sm text-amber-800">
+                <div className="flex items-start gap-2 rounded-md bg-warning/10 p-3 text-sm text-warning">
                   <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
                   <p>
                     Changing LAN IP, DHCP, gateway, or DNS may disconnect clients. Reconnect to the
@@ -1013,22 +998,22 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
                 <>
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-gray-700">Protocol</label>
+                      <label className="text-sm font-medium text-foreground">Protocol</label>
                       <select
                         value="static"
                         disabled
-                        className="w-full rounded-md border bg-gray-100 px-3 py-2 text-gray-600"
+                        className="w-full rounded-md border bg-muted px-3 py-2 text-muted-foreground"
                       >
                         <option value="static">{editTarget.protocol || 'Static address'}</option>
                       </select>
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-gray-700">Device</label>
+                      <label className="text-sm font-medium text-foreground">Device</label>
                       <select
                         value={editTarget.device || '@lan'}
                         disabled
-                        className="w-full rounded-md border bg-gray-100 px-3 py-2 text-gray-600"
+                        className="w-full rounded-md border bg-muted px-3 py-2 text-muted-foreground"
                       >
                         <option value={editTarget.device || '@lan'}>
                           {editTarget.device || '@lan'}
@@ -1039,46 +1024,46 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
 
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-gray-700">IPv4 Address</label>
+                      <label className="text-sm font-medium text-foreground">IPv4 Address</label>
                       <input
                         type="text"
                         value={editIp}
                         onChange={(e) => setEditIp(e.target.value)}
-                        className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+                        className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
                       />
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-gray-700">IPv4 Netmask</label>
+                      <label className="text-sm font-medium text-foreground">IPv4 Netmask</label>
                       <input
                         type="text"
                         value={editMask}
                         onChange={(e) => setEditMask(e.target.value)}
-                        className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+                        className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
                       />
                     </div>
                   </div>
 
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-gray-700">IPv4 Gateway</label>
+                      <label className="text-sm font-medium text-foreground">IPv4 Gateway</label>
                       <input
                         type="text"
                         value={editGateway}
                         onChange={(e) => setEditGateway(e.target.value)}
-                        className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+                        className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
                       />
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-gray-700">DNS Servers</label>
+                      <label className="text-sm font-medium text-foreground">DNS Servers</label>
                       <input
                         type="text"
                         value={editDns}
                         onChange={(e) => setEditDns(e.target.value)}
-                        className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+                        className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
                       />
-                      <div className="text-xs text-gray-400">
+                      <div className="text-xs text-muted-foreground">
                         Separate multiple DNS servers with spaces or commas.
                       </div>
                     </div>
@@ -1086,16 +1071,16 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
 
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-gray-700">Firewall Zone</label>
+                      <label className="text-sm font-medium text-foreground">Firewall Zone</label>
                       <input
                         type="text"
                         value={editTarget.firewall_zone || 'lan'}
                         readOnly
-                        className="w-full rounded-md border bg-gray-100 px-3 py-2 text-gray-600"
+                        className="w-full rounded-md border bg-muted px-3 py-2 text-muted-foreground"
                       />
                     </div>
 
-                    <label className="flex items-center gap-2 pt-7 text-sm text-gray-700">
+                    <label className="flex items-center gap-2 pt-7 text-sm text-foreground">
                       <input
                         type="checkbox"
                         checked={editAuto}
@@ -1109,8 +1094,8 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
                 <>
                   <label className="flex items-center justify-between gap-3 rounded border p-3 text-sm">
                     <div>
-                      <div className="font-medium text-gray-800">Enable DHCP Server</div>
-                      <div className="text-xs text-gray-500">
+                      <div className="font-medium text-foreground">Enable DHCP Server</div>
+                      <div className="text-xs text-muted-foreground">
                         When disabled, this interface will not serve DHCP leases.
                       </div>
                     </div>
@@ -1123,41 +1108,41 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
 
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-gray-700">Start Address Offset</label>
+                      <label className="text-sm font-medium text-foreground">Start Address Offset</label>
                       <input
                         type="text"
                         value={editDHCPStart}
                         onChange={(e) => setEditDHCPStart(e.target.value)}
-                        className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+                        className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
                         disabled={!editDHCPEnabled}
                       />
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-gray-700">Limit</label>
+                      <label className="text-sm font-medium text-foreground">Limit</label>
                       <input
                         type="text"
                         value={editDHCPLimit}
                         onChange={(e) => setEditDHCPLimit(e.target.value)}
-                        className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+                        className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
                         disabled={!editDHCPEnabled}
                       />
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-gray-700">Lease Time</label>
+                      <label className="text-sm font-medium text-foreground">Lease Time</label>
                       <input
                         type="text"
                         value={editDHCPLeaseTime}
                         onChange={(e) => setEditDHCPLeaseTime(e.target.value)}
-                        className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+                        className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
                         disabled={!editDHCPEnabled}
                       />
                     </div>
                   </div>
 
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <label className="flex items-center gap-2 rounded border p-3 text-sm text-gray-700">
+                    <label className="flex items-center gap-2 rounded border p-3 text-sm text-foreground">
                       <input
                         type="checkbox"
                         checked={editDHCPDynamic}
@@ -1167,7 +1152,7 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
                       Dynamic DHCP
                     </label>
 
-                    <label className="flex items-center gap-2 rounded border p-3 text-sm text-gray-700">
+                    <label className="flex items-center gap-2 rounded border p-3 text-sm text-foreground">
                       <input
                         type="checkbox"
                         checked={editDHCPForce}
@@ -1179,14 +1164,14 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="text-sm font-medium text-gray-700">DHCP Options</label>
+                    <label className="text-sm font-medium text-foreground">DHCP Options</label>
                     <textarea
                       value={editDHCPOptions}
                       onChange={(e) => setEditDHCPOptions(e.target.value)}
-                      className="min-h-[90px] w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+                      className="min-h-[90px] w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
                       disabled={!editDHCPEnabled}
                     />
-                    <div className="text-xs text-gray-400">
+                    <div className="text-xs text-muted-foreground">
                       One option per line, or separate options with spaces or commas.
                     </div>
                   </div>
@@ -1194,7 +1179,7 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
               )}
             </div>
 
-            <div className="flex justify-end gap-3 border-t bg-gray-50 px-6 py-4">
+            <div className="flex justify-end gap-3 border-t border-border px-6 py-4">
               <Button variant="outline" onClick={() => setIsEditOpen(false)} disabled={isSaving}>
                 Cancel
               </Button>

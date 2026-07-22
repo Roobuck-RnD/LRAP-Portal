@@ -83,8 +83,8 @@ export default function Administration(): JSX.Element {
   return (
     <div className="p-6 max-w-lg mx-auto">
       <div className="mb-6">
-        <h2 className="text-2xl font-bold text-gray-800">Change Password</h2>
-        <p className="text-sm text-gray-500">Update your system access password.</p>
+        <h2 className="text-2xl font-bold text-foreground">Change Password</h2>
+        <p className="text-sm text-muted-foreground">Update your system access password.</p>
       </div>
 
       <Card>
@@ -124,18 +124,18 @@ export default function Administration(): JSX.Element {
                 disabled={loading}
                 className={
                     confirmPassword && newPassword !== confirmPassword 
-                    ? "border-red-500 focus-visible:ring-red-500" 
+                    ? "border-destructive focus-visible:ring-destructive" 
                     : ""
                 }
               />
               {confirmPassword && newPassword !== confirmPassword && (
-                  <span className="text-xs text-red-500">Passwords do not match</span>
+                  <span className="text-xs text-destructive">Passwords do not match</span>
               )}
             </div>
 
             {/* Error Message */}
             {error && (
-              <div className="p-3 rounded bg-red-50 text-red-600 text-sm">
+              <div className="p-3 rounded bg-destructive/10 text-destructive text-sm">
                 {error}
               </div>
             )}

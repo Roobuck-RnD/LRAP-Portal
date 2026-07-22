@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useCurrentAllModuleStore } from '@/states/allModuleState'
 import { apiFetch } from '@/utils/http'
 import { Trash2, Plus, RefreshCw, Save, Route, Search } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 
 import {
   AlertDialog,
@@ -312,46 +313,37 @@ export default function StaticRoutes(): JSX.Element {
       <div className="mx-auto max-w-6xl">
         <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-3xl font-bold text-gray-900">Static IPv4 Routes</h2>
-            <p className="mt-1 text-sm text-gray-500">
+            <h2 className="text-3xl font-bold text-foreground">Static IPv4 Routes</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
               Configure persistent routing rules.
             </p>
           </div>
-
-          <button
-            onClick={() => void loadRoutes()}
-            disabled={loading}
-            className="flex items-center gap-2 rounded bg-gray-100 px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-200 disabled:opacity-50"
-          >
-            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-            Refresh
-          </button>
         </div>
 
         <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <div className="rounded-xl border bg-white p-4 shadow-sm">
-            <div className="text-sm text-gray-500">DHCP / Gateway Device</div>
-            <div className="mt-2 text-xl font-bold text-gray-900">
+          <div className="rounded-xl border bg-card p-4 shadow-sm">
+            <div className="text-sm text-muted-foreground">DHCP / Gateway Device</div>
+            <div className="mt-2 text-xl font-bold text-foreground">
               {acModule?.name || 'Router'}
             </div>
-            <div className="mt-1 font-mono text-xs text-gray-500">
+            <div className="mt-1 font-mono text-xs text-muted-foreground">
               {acModule?.ipaddress || ''}
             </div>
           </div>
 
-          <div className="rounded-xl border bg-white p-4 shadow-sm">
-            <div className="text-sm text-gray-500">Total Routes</div>
-            <div className="mt-2 text-3xl font-bold text-gray-900">{routes.length}</div>
+          <div className="rounded-xl border bg-card p-4 shadow-sm">
+            <div className="text-sm text-muted-foreground">Total Routes</div>
+            <div className="mt-2 text-3xl font-bold text-foreground">{routes.length}</div>
           </div>
 
-          <div className="rounded-xl border bg-white p-4 shadow-sm">
-            <div className="text-sm text-gray-500">Filtered Results</div>
-            <div className="mt-2 text-3xl font-bold text-gray-900">{filteredRoutes.length}</div>
+          <div className="rounded-xl border bg-card p-4 shadow-sm">
+            <div className="text-sm text-muted-foreground">Filtered Results</div>
+            <div className="mt-2 text-3xl font-bold text-foreground">{filteredRoutes.length}</div>
           </div>
         </div>
 
-        <div className="mb-6 flex items-center gap-2 rounded-xl border bg-white px-3 py-2 shadow-sm">
-          <Search className="h-4 w-4 text-gray-400" />
+        <div className="mb-6 flex items-center gap-2 rounded-xl border bg-card px-3 py-2 shadow-sm">
+          <Search className="h-4 w-4 text-muted-foreground" />
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -360,34 +352,34 @@ export default function StaticRoutes(): JSX.Element {
           />
         </div>
 
-        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-gray-100 bg-gray-50 px-4 py-3">
+        <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+          <div className="flex items-center justify-between border-b border-border px-4 py-3">
             <div className="flex items-center gap-2">
-              <Route className="h-5 w-5 text-blue-600" />
+              <Route className="h-5 w-5 text-primary" />
               <div>
-                <h3 className="text-lg font-semibold text-gray-800">
+                <h3 className="text-lg font-semibold text-foreground">
                   {acModule?.name || 'Router'}
                 </h3>
-                <div className="font-mono text-xs text-gray-500">
+                <div className="font-mono text-xs text-muted-foreground">
                   {acModule?.ipaddress || 'Static Routes'}
                 </div>
               </div>
             </div>
 
-            {loading && <span className="text-xs text-blue-500 animate-pulse">Syncing...</span>}
-            {error && <span className="text-xs font-medium text-red-500">Error</span>}
+            {loading && <span className="text-xs text-primary animate-pulse">Syncing...</span>}
+            {error && <span className="text-xs font-medium text-destructive">Error</span>}
           </div>
 
           <div className="p-4">
             {error && (
-              <div className="mb-4 rounded border border-red-100 bg-red-50 p-3 text-sm text-red-600">
+              <div className="mb-4 rounded border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
                 {error}
               </div>
             )}
 
-            <div className="mb-6 overflow-x-auto rounded border border-gray-200">
+            <div className="mb-6 overflow-x-auto rounded border border-border">
               <table className="min-w-full text-left text-xs">
-                <thead className="bg-gray-50 text-gray-500">
+                <thead className="border-b border-border text-muted-foreground">
                   <tr>
                     <th className="px-3 py-2 font-medium">Interface</th>
                     <th className="px-3 py-2 font-medium">Target</th>
@@ -398,10 +390,10 @@ export default function StaticRoutes(): JSX.Element {
                   </tr>
                 </thead>
 
-                <tbody className="divide-y divide-gray-100">
+                <tbody className="divide-y divide-border">
                   {filteredRoutes.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-3 py-8 text-center italic text-gray-400">
+                      <td colSpan={6} className="px-3 py-8 text-center italic text-muted-foreground">
                         {search.trim()
                           ? 'No static routes matched your search.'
                           : 'No static routes configured.'}
@@ -409,27 +401,29 @@ export default function StaticRoutes(): JSX.Element {
                     </tr>
                   ) : (
                     filteredRoutes.map((route) => (
-                      <tr key={route.section} className="group hover:bg-gray-50">
-                        <td className="px-3 py-2 font-medium text-gray-700">
+                      <tr key={route.section} className="group hover:bg-muted">
+                        <td className="px-3 py-2 font-medium text-foreground">
                           {route.interface || '-'}
                         </td>
                         <td className="px-3 py-2 font-mono">{route.target}</td>
-                        <td className="px-3 py-2 font-mono text-gray-500">{route.netmask}</td>
-                        <td className="px-3 py-2 font-mono text-gray-500">
+                        <td className="px-3 py-2 font-mono text-muted-foreground">{route.netmask}</td>
+                        <td className="px-3 py-2 font-mono text-muted-foreground">
                           {route.gateway || '-'}
                         </td>
-                        <td className="px-3 py-2 text-right text-gray-500">
+                        <td className="px-3 py-2 text-right text-muted-foreground">
                           {route.metric || '0'}
                         </td>
                         <td className="px-3 py-2 text-right">
-                          <button
+                          <Button
+                            variant="outline"
+                            size="sm"
                             onClick={() => triggerDelete(route.section)}
-                            className="text-gray-400 transition hover:text-red-600"
+                            className="border-destructive/30 text-destructive hover:bg-destructive/10"
                             title="Delete Route"
                             disabled={loading}
                           >
                             <Trash2 size={14} />
-                          </button>
+                          </Button>
                         </td>
                       </tr>
                     ))
@@ -438,17 +432,17 @@ export default function StaticRoutes(): JSX.Element {
               </table>
             </div>
 
-            <div className="rounded-lg border border-blue-100 bg-blue-50/50 p-4">
-              <div className="mb-3 flex items-center gap-1 text-xs font-semibold uppercase text-blue-700">
-                <Plus size={12} />
+            <div className="rounded-lg border border-border bg-muted/40 p-4">
+              <div className="mb-3 flex items-center gap-1 text-xs font-semibold uppercase text-muted-foreground">
+                <Plus size={12} className="text-primary" />
                 Add Static Route
               </div>
 
               <div className="mb-3 grid grid-cols-12 gap-2">
                 <div className="col-span-4 sm:col-span-2">
-                  <label className="mb-0.5 block text-[10px] text-gray-500">Interface</label>
+                  <label className="mb-0.5 block text-[10px] text-muted-foreground">Interface</label>
                   <select
-                    className="w-full rounded border-gray-300 px-1 py-1 text-xs focus:border-blue-500 focus:ring-blue-500"
+                    className="w-full rounded border-border px-1 py-1 text-xs focus:border-ring focus:ring-ring"
                     value={form.interface}
                     onChange={(e) => handleFormChange('interface', e.target.value)}
                   >
@@ -459,43 +453,43 @@ export default function StaticRoutes(): JSX.Element {
                 </div>
 
                 <div className="col-span-8 sm:col-span-3">
-                  <label className="mb-0.5 block text-[10px] text-gray-500">Target IP</label>
+                  <label className="mb-0.5 block text-[10px] text-muted-foreground">Target IP</label>
                   <input
                     type="text"
                     placeholder="192.168.50.0"
-                    className="w-full rounded border-gray-300 px-2 py-1 text-xs focus:border-blue-500 focus:ring-blue-500"
+                    className="w-full rounded border-border px-2 py-1 text-xs focus:border-ring focus:ring-ring"
                     value={form.target}
                     onChange={(e) => handleFormChange('target', e.target.value)}
                   />
                 </div>
 
                 <div className="col-span-4 sm:col-span-3">
-                  <label className="mb-0.5 block text-[10px] text-gray-500">Netmask</label>
+                  <label className="mb-0.5 block text-[10px] text-muted-foreground">Netmask</label>
                   <input
                     type="text"
                     placeholder="255.255.255.0"
-                    className="w-full rounded border-gray-300 px-2 py-1 text-xs focus:border-blue-500 focus:ring-blue-500"
+                    className="w-full rounded border-border px-2 py-1 text-xs focus:border-ring focus:ring-ring"
                     value={form.netmask}
                     onChange={(e) => handleFormChange('netmask', e.target.value)}
                   />
                 </div>
 
                 <div className="col-span-5 sm:col-span-3">
-                  <label className="mb-0.5 block text-[10px] text-gray-500">Gateway</label>
+                  <label className="mb-0.5 block text-[10px] text-muted-foreground">Gateway</label>
                   <input
                     type="text"
-                    className="w-full rounded border-gray-300 px-2 py-1 text-xs focus:border-blue-500 focus:ring-blue-500"
+                    className="w-full rounded border-border px-2 py-1 text-xs focus:border-ring focus:ring-ring"
                     value={form.gateway}
                     onChange={(e) => handleFormChange('gateway', e.target.value)}
                   />
                 </div>
 
                 <div className="col-span-3 sm:col-span-1">
-                  <label className="mb-0.5 block text-[10px] text-gray-500">Metric</label>
+                  <label className="mb-0.5 block text-[10px] text-muted-foreground">Metric</label>
                   <input
                     type="number"
                     min={0}
-                    className="w-full rounded border-gray-300 px-1 py-1 text-xs focus:border-blue-500 focus:ring-blue-500"
+                    className="w-full rounded border-border px-1 py-1 text-xs focus:border-ring focus:ring-ring"
                     value={form.metric}
                     onChange={(e) => handleFormChange('metric', e.target.value)}
                   />
@@ -503,14 +497,10 @@ export default function StaticRoutes(): JSX.Element {
               </div>
 
               <div className="flex justify-end">
-                <button
-                  onClick={triggerAdd}
-                  disabled={loading || !form.target}
-                  className="flex items-center gap-1 rounded bg-blue-600 px-3 py-1.5 text-xs text-white transition hover:bg-blue-700 disabled:opacity-50"
-                >
+                <Button size="sm" onClick={triggerAdd} disabled={loading || !form.target}>
                   <Save size={14} />
                   Save & Apply
-                </button>
+                </Button>
               </div>
             </div>
           </div>
@@ -542,7 +532,7 @@ export default function StaticRoutes(): JSX.Element {
               onClick={() => {
                 void executeAction()
               }}
-              className={actionConfirm.type === 'delete' ? 'bg-red-600 hover:bg-red-700' : ''}
+              className={actionConfirm.type === 'delete' ? 'bg-destructive hover:bg-destructive/90' : ''}
             >
               Continue
             </AlertDialogAction>
@@ -552,10 +542,10 @@ export default function StaticRoutes(): JSX.Element {
 
       {isProcessing && (
         <div className="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-black/40 backdrop-blur-sm transition-opacity">
-          <div className="flex flex-col items-center rounded-2xl bg-white px-8 py-10 shadow-2xl">
-            <RefreshCw className="mb-6 h-12 w-12 animate-spin text-blue-600" />
-            <h3 className="text-xl font-bold text-gray-800">Applying Configuration</h3>
-            <p className="mt-3 text-center text-sm leading-relaxed text-gray-500">
+          <div className="flex flex-col items-center rounded-2xl bg-card px-8 py-10 shadow-2xl">
+            <RefreshCw className="mb-6 h-12 w-12 animate-spin text-primary" />
+            <h3 className="text-xl font-bold text-foreground">Applying Configuration</h3>
+            <p className="mt-3 text-center text-sm leading-relaxed text-muted-foreground">
               Reloading network service.
               <br />
               Please wait while we reconnect...

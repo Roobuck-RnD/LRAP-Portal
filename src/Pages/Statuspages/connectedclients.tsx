@@ -2,11 +2,9 @@ import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch } from '@/utils/http'
 import useDevModeStore from '@/states/devModeState'
-import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
-  RefreshCw,
   Wifi,
   Router,
   Smartphone,
@@ -67,11 +65,11 @@ function formatHostname(client: ConnectedClient): string {
 }
 
 function signalClass(rssi?: number): string {
-  if (typeof rssi !== 'number' || rssi === 0) return 'text-gray-600 bg-gray-100'
-  if (rssi >= -55) return 'text-green-700 bg-green-100'
-  if (rssi >= -67) return 'text-blue-700 bg-blue-100'
-  if (rssi >= -75) return 'text-amber-700 bg-amber-100'
-  return 'text-red-700 bg-red-100'
+  if (typeof rssi !== 'number' || rssi === 0) return 'text-muted-foreground bg-muted'
+  if (rssi >= -55) return 'text-success bg-success/15'
+  if (rssi >= -67) return 'text-primary bg-primary/15'
+  if (rssi >= -75) return 'text-warning bg-warning/15'
+  return 'text-destructive bg-destructive/15'
 }
 
 function signalText(client: ConnectedClient): string {
@@ -88,10 +86,10 @@ function signalText(client: ConnectedClient): string {
 function bandBadgeClass(band?: string): string {
   const b = (band || '').toLowerCase()
 
-  if (b.includes('5')) return 'bg-purple-100 text-purple-700'
-  if (b.includes('2.4') || b.includes('2g')) return 'bg-blue-100 text-blue-700'
+  if (b.includes('5')) return 'bg-signal/15 text-signal'
+  if (b.includes('2.4') || b.includes('2g')) return 'bg-primary/15 text-primary'
 
-  return 'bg-gray-100 text-gray-700'
+  return 'bg-muted text-foreground'
 }
 
 function stableStringifyModules(modules: ClientModule[]): string {
@@ -125,7 +123,7 @@ function ConnectedClients(): JSX.Element {
 
   const [modules, setModules] = useState<ClientModule[]>([])
   const [initialLoading, setInitialLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
+  const [, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
 
@@ -229,24 +227,24 @@ function ConnectedClients(): JSX.Element {
     return (
       <div className="w-full p-6">
         <div className="mb-8">
-          <div className="mb-3 h-9 w-72 animate-pulse rounded bg-gray-200" />
-          <div className="h-5 w-96 animate-pulse rounded bg-gray-100" />
+          <div className="mb-3 h-9 w-72 animate-pulse rounded bg-muted" />
+          <div className="h-5 w-96 animate-pulse rounded bg-muted" />
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
           {[1, 2, 3, 4].map((i) => (
             <Card key={i}>
               <CardHeader>
-                <div className="h-5 w-28 animate-pulse rounded bg-gray-200" />
+                <div className="h-5 w-28 animate-pulse rounded bg-muted" />
               </CardHeader>
               <CardContent>
-                <div className="h-8 w-16 animate-pulse rounded bg-gray-100" />
+                <div className="h-8 w-16 animate-pulse rounded bg-muted" />
               </CardContent>
             </Card>
           ))}
         </div>
 
-        <div className="mt-6 h-72 animate-pulse rounded-xl bg-gray-100" />
+        <div className="mt-6 h-72 animate-pulse rounded-xl bg-muted" />
       </div>
     )
   }
@@ -255,23 +253,12 @@ function ConnectedClients(): JSX.Element {
     <div className="w-full p-6">
       <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
-          <h2 className="text-3xl font-bold text-gray-900">Connected Clients</h2>
+          <h2 className="text-3xl font-bold text-foreground">Connected Clients</h2>
         </div>
-
-        <Button
-          onClick={() => {
-            void fetchClients('manual')
-          }}
-          disabled={refreshing}
-          className="bg-blue-600 text-white hover:bg-blue-700"
-        >
-          <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-          Refresh
-        </Button>
       </div>
 
       {error && (
-        <div className="mb-6 flex gap-2 rounded border border-red-100 bg-red-50 p-3 text-sm text-red-600">
+        <div className="mb-6 flex gap-2 rounded border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>{error}</span>
         </div>
@@ -282,7 +269,7 @@ function ConnectedClients(): JSX.Element {
           <CardHeader className="pb-2">
             <CardDescription>Total Clients</CardDescription>
             <CardTitle className="flex items-center gap-2 text-3xl">
-              <Smartphone className="h-6 w-6 text-blue-600" />
+              <Smartphone className="h-6 w-6 text-primary" />
               {totalClients}
             </CardTitle>
           </CardHeader>
@@ -292,7 +279,7 @@ function ConnectedClients(): JSX.Element {
           <CardHeader className="pb-2">
             <CardDescription>Router Clients</CardDescription>
             <CardTitle className="flex items-center gap-2 text-3xl">
-              <Router className="h-6 w-6 text-gray-700" />
+              <Router className="h-6 w-6 text-foreground" />
               {acClients}
             </CardTitle>
           </CardHeader>
@@ -302,7 +289,7 @@ function ConnectedClients(): JSX.Element {
           <CardHeader className="pb-2">
             <CardDescription>Antenna Clients</CardDescription>
             <CardTitle className="flex items-center gap-2 text-3xl">
-              <Wifi className="h-6 w-6 text-purple-600" />
+              <Wifi className="h-6 w-6 text-signal" />
               {apClients}
             </CardTitle>
           </CardHeader>
@@ -312,15 +299,15 @@ function ConnectedClients(): JSX.Element {
           <CardHeader className="pb-2">
             <CardDescription>Antenna Number</CardDescription>
             <CardTitle className="flex items-center gap-2 text-3xl">
-              <Wifi className="h-6 w-6 text-blue-600" />
+              <Wifi className="h-6 w-6 text-primary" />
               {apCount}
             </CardTitle>
           </CardHeader>
         </Card>
       </div>
 
-      <div className="mb-6 flex items-center gap-2 rounded-xl border bg-white px-3 py-2 shadow-sm">
-        <Search className="h-4 w-4 text-gray-400" />
+      <div className="mb-6 flex items-center gap-2 rounded-xl border bg-card px-3 py-2 shadow-sm">
+        <Search className="h-4 w-4 text-muted-foreground" />
         <Input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -330,11 +317,11 @@ function ConnectedClients(): JSX.Element {
       </div>
 
       <div className="mb-8">
-        <h3 className="mb-3 text-lg font-semibold text-gray-900">Devices</h3>
+        <h3 className="mb-3 text-lg font-semibold text-foreground">Devices</h3>
 
         {modules.length === 0 ? (
           <Card>
-            <CardContent className="p-6 text-sm text-gray-500">
+            <CardContent className="p-6 text-sm text-muted-foreground">
               No devices found.
             </CardContent>
           </Card>
@@ -353,9 +340,9 @@ function ConnectedClients(): JSX.Element {
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-start gap-2">
                         {mod.type === 'main' ? (
-                          <Router className="mt-1 h-5 w-5 shrink-0 text-gray-700" />
+                          <Router className="mt-1 h-5 w-5 shrink-0 text-foreground" />
                         ) : (
-                          <Wifi className="mt-1 h-5 w-5 shrink-0 text-blue-600" />
+                          <Wifi className="mt-1 h-5 w-5 shrink-0 text-primary" />
                         )}
 
                         <div>
@@ -367,19 +354,19 @@ function ConnectedClients(): JSX.Element {
                             <>
                               <CardDescription>{mod.ip || '—'}</CardDescription>
 
-                              <div className="mt-2 space-y-1 text-[11px] leading-tight text-gray-500">
+                              <div className="mt-2 space-y-1 text-[11px] leading-tight text-muted-foreground">
                                 <div>
-                                  <span className="font-medium text-gray-600">br-lan:</span>{' '}
+                                  <span className="font-medium text-muted-foreground">br-lan:</span>{' '}
                                   <span className="font-mono">{brLanMac || '—'}</span>
                                 </div>
 
                                 <div>
-                                  <span className="font-medium text-gray-600">ra0 / 2.4G:</span>{' '}
+                                  <span className="font-medium text-muted-foreground">ra0 / 2.4G:</span>{' '}
                                   <span className="font-mono">{ra0Mac || '—'}</span>
                                 </div>
 
                                 <div>
-                                  <span className="font-medium text-gray-600">rax0 / 5G:</span>{' '}
+                                  <span className="font-medium text-muted-foreground">rax0 / 5G:</span>{' '}
                                   <span className="font-mono">{rax0Mac || '—'}</span>
                                 </div>
                               </div>
@@ -392,8 +379,8 @@ function ConnectedClients(): JSX.Element {
                         className={
                           'rounded px-2 py-1 text-xs font-medium ' +
                           (isOnline
-                            ? 'bg-green-100 text-green-700'
-                            : 'bg-gray-100 text-gray-600')
+                            ? 'bg-success/15 text-success'
+                            : 'bg-muted text-muted-foreground')
                         }
                       >
                         {isOnline ? 'Online' : 'Offline'}
@@ -404,8 +391,8 @@ function ConnectedClients(): JSX.Element {
                   <CardContent>
                     <div className="flex items-end justify-between">
                       <div>
-                        <div className="text-xs text-gray-500">Connected Clients</div>
-                        <div className="text-3xl font-bold text-gray-900">{clientCount}</div>
+                        <div className="text-xs text-muted-foreground">Connected Clients</div>
+                        <div className="text-3xl font-bold text-foreground">{clientCount}</div>
                       </div>
                     </div>
                   </CardContent>
@@ -427,16 +414,16 @@ function ConnectedClients(): JSX.Element {
         <CardContent>
           {filteredClients.length === 0 ? (
             <div className="rounded-lg border border-dashed p-8 text-center">
-              <Monitor className="mx-auto mb-3 h-8 w-8 text-gray-400" />
-              <div className="text-sm font-medium text-gray-700">No connected clients found</div>
-              <div className="mt-1 text-xs text-gray-500">
+              <Monitor className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+              <div className="text-sm font-medium text-foreground">No connected clients found</div>
+              <div className="mt-1 text-xs text-muted-foreground">
                 Try refreshing or clearing the search filter.
               </div>
             </div>
           ) : (
             <div className="overflow-auto">
               <table className="min-w-full text-sm">
-                <thead className="border-b bg-gray-50 text-xs text-gray-500">
+                <thead className="border-b border-border text-xs text-muted-foreground">
                   <tr>
                     <th className="px-3 py-2 text-left">Client</th>
                     <th className="px-3 py-2 text-left">IP</th>
@@ -456,25 +443,25 @@ function ConnectedClients(): JSX.Element {
                       className="border-b"
                     >
                       <td className="px-3 py-2">
-                        <div className="font-medium text-gray-900">{formatHostname(client)}</div>
+                        <div className="font-medium text-foreground">{formatHostname(client)}</div>
                       </td>
 
-                      <td className="px-3 py-2 text-gray-700">{client.ip || '—'}</td>
+                      <td className="px-3 py-2 text-foreground">{client.ip || '—'}</td>
 
                       <td className="px-3 py-2">
-                        <span className="font-mono text-xs text-gray-700">
+                        <span className="font-mono text-xs text-foreground">
                           {normalizeMac(client.mac)}
                         </span>
                       </td>
 
                       <td className="px-3 py-2">
-                        <div className="font-medium text-gray-900">{client.moduleName}</div>
+                        <div className="font-medium text-foreground">{client.moduleName}</div>
                         {devMode && (
-                          <div className="text-xs text-gray-500">{client.moduleIP || '—'}</div>
+                          <div className="text-xs text-muted-foreground">{client.moduleIP || '—'}</div>
                         )}
                       </td>
 
-                      <td className="px-3 py-2 text-gray-700">{client.ssid || '—'}</td>
+                      <td className="px-3 py-2 text-foreground">{client.ssid || '—'}</td>
 
                       <td className="px-3 py-2">
                         <span
@@ -495,7 +482,7 @@ function ConnectedClients(): JSX.Element {
                         </span>
                       </td>
 
-                      <td className="px-3 py-2 text-gray-700">
+                      <td className="px-3 py-2 text-foreground">
                         {client.connected_time || '—'}
                       </td>
                     </tr>

@@ -1,15 +1,19 @@
-import type { JSX } from 'react'
+import type { JSX, ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useCurrentAllModuleStore } from '@/states/allModuleState'
 import useDevModeStore from '@/states/devModeState'
 import { apiFetch } from '@/utils/http'
 import { confirmDialog } from '@/components/ui/confirm'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 
 // ---------- helpers (memory UI) ----------
-function formatKiB(kib?: number | null): string {
-  if (!kib || kib <= 0) return '0 MiB'
-  return (kib / 1024).toFixed(2) + ' MiB'
+// ubus system.info reports memory in BYTES, so convert bytes -> MiB (GiB once large).
+function formatMem(bytes?: number | null): string {
+  if (!bytes || bytes <= 0) return '0 MiB'
+  const mib = bytes / (1024 * 1024)
+  return mib >= 1024 ? (mib / 1024).toFixed(2) + ' GiB' : mib.toFixed(1) + ' MiB'
 }
 
 function percentage(part: number, total: number): string {
@@ -23,12 +27,15 @@ function MemoryBar({ label, value, total }: { label: string; value: number; tota
 
   return (
     <div>
-      <div className="mb-1 flex justify-between text-xs">
-        <span>{label}</span>
-        <span>{`${formatKiB(value)} / ${formatKiB(total)} (${width})`}</span>
+      <div className="mb-1 flex items-baseline justify-between gap-2">
+        <span className="text-muted-foreground text-xs">{label}</span>
+        <span className="data text-foreground/80 text-[11px]">{width}</span>
       </div>
-      <div className="h-2 rounded bg-gray-200">
-        <div className="h-2 rounded bg-blue-600" style={{ width }} />
+      <div className="bg-muted h-1.5 overflow-hidden rounded-full">
+        <div className="bg-primary h-full rounded-full transition-[width] duration-500" style={{ width }} />
+      </div>
+      <div className="data text-muted-foreground mt-1 text-[10px]">
+        {formatMem(value)} / {formatMem(total)}
       </div>
     </div>
   )
@@ -121,62 +128,85 @@ function isReservedAPLease(lease: LeaseInfo): boolean {
   return RESERVED_AP_DHCP_IPS.has(String(lease.ip || '').trim())
 }
 
+// 小工具:label 在上、value 在下的一格键值对。value 支持 mono(数据)。
+function Field({ label, value, mono }: { label: string; value?: string; mono?: boolean }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-muted-foreground text-[10px] tracking-wide uppercase">{label}</dt>
+      <dd className={`text-foreground text-[13px] font-medium break-words ${mono ? 'data' : ''}`}>
+        {value || '—'}
+      </dd>
+    </div>
+  )
+}
+
+function ErrorNote({ children }: { children: ReactNode }) {
+  return (
+    <div className="border-warning/30 bg-warning/10 text-warning rounded-md border p-2 text-xs">
+      {children}
+    </div>
+  )
+}
+
+// 卡壳:统一深色卡外观。
+function Panel({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <div className={`border-border bg-card rounded-lg border p-4 shadow-sm ${className ?? ''}`}>
+      {children}
+    </div>
+  )
+}
+
+function CardHead({ name, ip }: { name?: string; ip?: string }) {
+  return (
+    <div className="mb-3 flex items-center justify-between gap-2">
+      <div className="font-display truncate text-sm font-semibold tracking-tight">
+        {name || 'Unknown Host'}
+      </div>
+      {ip !== undefined && <div className="data text-muted-foreground text-xs">{ip || '—'}</div>}
+    </div>
+  )
+}
+
 // 单张卡抽成组件,供开发者模式的"每模块堆叠"与默认模式的"主设备三合一行"复用。
 function SysCard({ v, className }: { v: SysView; className?: string }) {
   const info = v.sys
 
   return (
-    <div className={`rounded-xl border border-gray-200 bg-white p-3 shadow-sm ${className ?? ''}`}>
-      <div className="mb-2 flex items-start justify-between gap-2">
-        <div className="truncate text-sm font-semibold">
+    <Panel className={className}>
+      <div className="mb-3 flex items-start justify-between gap-2">
+        <div className="font-display truncate text-sm font-semibold tracking-tight">
           {info?.hostname || v.name || 'Unknown Host'}
         </div>
-        <div className="max-w-[120px] truncate text-[10px] leading-tight text-gray-500" title={info?.model || '—'}>{info?.model || '—'}</div>
+        <div
+          className="text-muted-foreground max-w-[140px] truncate text-[10px] leading-tight"
+          title={info?.model || '—'}
+        >
+          {info?.model || '—'}
+        </div>
       </div>
 
       {info ? (
-        <dl className="grid grid-cols-2 gap-x-2 gap-y-2 text-[13px] leading-tight">
-          <div>
-            <dt className="text-[10px] text-gray-500">Architecture</dt>
-            <dd className="whitespace-nowrap font-medium">{info.architecture || '—'}</dd>
-          </div>
-          <div>
-            <dt className="text-[10px] text-gray-500">Target</dt>
-            <dd className="whitespace-nowrap font-medium">{info.target || '—'}</dd>
-          </div>
-          <div>
-            <dt className="text-[10px] text-gray-500">Firmware</dt>
-            <dd className="whitespace-pre-wrap break-words font-medium">{info.firmware_version || '—'}</dd>
-          </div>
-          <div>
-            <dt className="text-[10px] text-gray-500">Kernel</dt>
-            <dd className="whitespace-nowrap font-medium">{info.kernel_version || '—'}</dd>
-          </div>
-          <div>
-            <dt className="text-[10px] text-gray-500">Local Time</dt>
-            <dd className="whitespace-nowrap font-medium">{info.local_time || '—'}</dd>
-          </div>
-          <div>
-            <dt className="text-[10px] text-gray-500">Uptime</dt>
-            <dd className="whitespace-nowrap font-medium">{info.uptime || '—'}</dd>
-          </div>
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
+          <Field label="Architecture" value={info.architecture} />
+          <Field label="Target" value={info.target} mono />
+          <Field label="Firmware" value={info.firmware_version} />
+          <Field label="Kernel" value={info.kernel_version} mono />
+          <Field label="Local Time" value={info.local_time} mono />
+          <Field label="Uptime" value={info.uptime} mono />
           <div className="col-span-2">
-            <dt className="text-[10px] text-gray-500">Load Average</dt>
-            <dd className="whitespace-nowrap font-medium">{info.load_average || '—'}</dd>
+            <Field label="Load Average" value={info.load_average} mono />
           </div>
           {info.temperature !== undefined && (
             <div className="col-span-2">
-              <dt className="text-[10px] text-gray-500">Temperature</dt>
-              <dd className="whitespace-nowrap font-medium">{info.temperature ?? 'N/A'}</dd>
+              <Field label="Temperature" value={info.temperature ?? 'N/A'} mono />
             </div>
           )}
         </dl>
       ) : (
-        <div className="rounded-md bg-amber-50 p-2 text-xs text-amber-700">
-          {v.error ? 'System error' : 'N/A'}
-        </div>
+        <ErrorNote>{v.error ? 'System error' : 'N/A'}</ErrorNote>
       )}
-    </div>
+    </Panel>
   )
 }
 
@@ -184,25 +214,20 @@ function MemCard({ v, className }: { v: MemView; className?: string }) {
   const m = v.mem
 
   return (
-    <div className={`rounded-xl border border-gray-200 bg-white p-4 shadow-sm ${className ?? ''}`}>
-      <div className="mb-3 flex items-center justify-between">
-        <div className="text-base font-medium">{v.name || 'Unknown Host'}</div>
-        <div className="text-xs text-gray-500">{v.ip || '—'}</div>
-      </div>
+    <Panel className={className}>
+      <CardHead name={v.name} ip={v.ip} />
 
       {m ? (
-        <div className="space-y-2">
+        <div className="space-y-3">
           <MemoryBar label="Available" value={m.available} total={m.total} />
           <MemoryBar label="Used" value={m.used} total={m.total} />
           <MemoryBar label="Buffered" value={m.buffered} total={m.total} />
           <MemoryBar label="Cached" value={m.cached} total={m.total} />
         </div>
       ) : (
-        <div className="rounded-md bg-amber-50 p-2 text-xs text-amber-700">
-          {v.error ? 'Memory error' : 'N/A'}
-        </div>
+        <ErrorNote>{v.error ? 'Memory error' : 'N/A'}</ErrorNote>
       )}
-    </div>
+    </Panel>
   )
 }
 
@@ -210,49 +235,25 @@ function NetCard({ v, className }: { v: NetView; className?: string }) {
   const n = v.net
 
   return (
-    <div className={`rounded-xl border border-gray-200 bg-white p-4 shadow-sm ${className ?? ''}`}>
-      <div className="mb-3 flex items-center justify-between">
-        <div className="text-base font-medium">{v.name || 'Unknown Host'}</div>
-        <div className="text-xs text-gray-500">{v.ip || '—'}</div>
-      </div>
+    <Panel className={className}>
+      <CardHead name={v.name} ip={v.ip} />
 
       {n ? (
-        <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
-          <div>
-            <dt className="text-xs text-gray-500">Protocol</dt>
-            <dd className="font-medium">{n.protocol || '—'}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-gray-500">Device</dt>
-            <dd className="font-medium">{n.device || '—'}</dd>
-          </div>
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
+          <Field label="Protocol" value={n.protocol} />
+          <Field label="Device" value={n.device} mono />
           <div className="col-span-2">
-            <dt className="text-xs text-gray-500">Address</dt>
-            <dd className="break-all font-medium">{n.address || '—'}</dd>
+            <Field label="Address" value={n.address} mono />
           </div>
-          <div>
-            <dt className="text-xs text-gray-500">Gateway</dt>
-            <dd className="font-medium">{n.gateway || '—'}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-gray-500">DNS</dt>
-            <dd className="font-medium">{n.dns || '—'}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-gray-500">Connected</dt>
-            <dd className="font-medium">{n.connected || '—'}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-gray-500">MAC</dt>
-            <dd className="break-all font-medium">{n.mac || '—'}</dd>
-          </div>
+          <Field label="Gateway" value={n.gateway} mono />
+          <Field label="DNS" value={n.dns} mono />
+          <Field label="Connected" value={n.connected} mono />
+          <Field label="MAC" value={n.mac} mono />
         </dl>
       ) : (
-        <div className="rounded-md bg-amber-50 p-2 text-xs text-amber-700">
-          {v.error ? 'Network error' : 'N/A'}
-        </div>
+        <ErrorNote>{v.error ? 'Network error' : 'N/A'}</ErrorNote>
       )}
-    </div>
+    </Panel>
   )
 }
 
@@ -705,10 +706,10 @@ function Overview(): JSX.Element {
     <div className="relative p-4">
       {/* ---------- Fullscreen Overlay ---------- */}
       {isConfiguring && (
-        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm transition-opacity">
-          <div className="flex flex-col items-center rounded-xl bg-white p-8 shadow-2xl animate-bounce-in">
+        <div className="bg-background/70 fixed inset-0 z-50 flex flex-col items-center justify-center backdrop-blur-sm transition-opacity">
+          <div className="border-border bg-card animate-bounce-in flex flex-col items-center rounded-lg border p-8 shadow-2xl">
             <svg
-              className="mb-4 h-10 w-10 animate-spin text-blue-600"
+              className="text-primary mb-4 h-10 w-10 animate-spin"
               xmlns="http://www.w3.org/2000/svg"
               fill="none"
               viewBox="0 0 24 24"
@@ -727,10 +728,10 @@ function Overview(): JSX.Element {
                 d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
               />
             </svg>
-            <h3 className="mb-2 text-xl font-bold text-gray-800">
-              {resettingDhcp ? 'Resetting DHCP...' : 'Applying Changes...'}
+            <h3 className="font-display text-foreground mb-2 text-xl font-semibold">
+              {resettingDhcp ? 'Resetting DHCP…' : 'Applying changes…'}
             </h3>
-            <p className="max-w-xs text-center text-gray-500">
+            <p className="text-muted-foreground max-w-xs text-center text-sm">
               {resettingDhcp ? 'Clearing DHCP lease records.' : 'Updating static lease settings.'}
               <br />
               Please wait.
@@ -743,11 +744,11 @@ function Overview(): JSX.Element {
         <>
           {/* ---------- System Info (per-module) ---------- */}
           <div className="mb-3">
-            <h2 className="text-lg font-semibold">System Info</h2>
+            <h2 className="text-lg font-semibold tracking-tight">System Info</h2>
           </div>
 
           {sysViews.length === 0 ? (
-            <div className="text-sm text-gray-500">Loading system info…</div>
+            <div className="text-muted-foreground text-sm">Loading system info…</div>
           ) : (
             <div className={cardsGridClass}>
               {visibleSysViews.map((v, idx) => (
@@ -756,15 +757,15 @@ function Overview(): JSX.Element {
             </div>
           )}
 
-          <div className="my-6 h-px w-full bg-gray-200" />
+          <div className="bg-border my-6 h-px w-full" />
 
           {/* ---------- System Memory (per-module) ---------- */}
           <div className="mb-3">
-            <h2 className="text-lg font-semibold">System Memory</h2>
+            <h2 className="text-lg font-semibold tracking-tight">System Memory</h2>
           </div>
 
           {memViews.length === 0 ? (
-            <div className="text-sm text-gray-500">Loading memory…</div>
+            <div className="text-muted-foreground text-sm">Loading memory…</div>
           ) : (
             <div className={cardsGridClass}>
               {visibleMemViews.map((v, idx) => (
@@ -773,15 +774,15 @@ function Overview(): JSX.Element {
             </div>
           )}
 
-          <div className="my-6 h-px w-full bg-gray-200" />
+          <div className="bg-border my-6 h-px w-full" />
 
           {/* ---------- Network (per-module) ---------- */}
           <div className="mb-3">
-            <h2 className="text-lg font-semibold">Network</h2>
+            <h2 className="text-lg font-semibold tracking-tight">Network</h2>
           </div>
 
           {netViews.length === 0 ? (
-            <div className="text-sm text-gray-500">Loading network…</div>
+            <div className="text-muted-foreground text-sm">Loading network…</div>
           ) : (
             <div className={cardsGridClass}>
               {visibleNetViews.map((v, idx) => (
@@ -794,37 +795,43 @@ function Overview(): JSX.Element {
         <>
           {/* ---------- 默认模式:主设备的 System / Memory / Network 三合一行 ---------- */}
           <div className="mb-3">
-            <h2 className="text-lg font-semibold">Device Overview</h2>
+            <h2 className="text-lg font-semibold tracking-tight">Device Overview</h2>
           </div>
 
           {sysViews.length === 0 && memViews.length === 0 && netViews.length === 0 ? (
-            <div className="text-sm text-gray-500">Loading…</div>
+            <div className="text-muted-foreground text-sm">Loading…</div>
           ) : (
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
               <div className="flex flex-col gap-2">
-                <h3 className="text-xs font-medium uppercase tracking-wide text-gray-500">System</h3>
+                <h3 className="text-muted-foreground font-sans text-xs font-medium tracking-[0.12em] uppercase">
+                  System
+                </h3>
                 {mainSysView ? (
                   <SysCard v={mainSysView} className="flex-1" />
                 ) : (
-                  <div className="text-sm text-gray-500">Loading…</div>
+                  <div className="text-muted-foreground text-sm">Loading…</div>
                 )}
               </div>
 
               <div className="flex flex-col gap-2">
-                <h3 className="text-xs font-medium uppercase tracking-wide text-gray-500">Memory</h3>
+                <h3 className="text-muted-foreground font-sans text-xs font-medium tracking-[0.12em] uppercase">
+                  Memory
+                </h3>
                 {mainMemView ? (
                   <MemCard v={mainMemView} className="flex-1" />
                 ) : (
-                  <div className="text-sm text-gray-500">Loading…</div>
+                  <div className="text-muted-foreground text-sm">Loading…</div>
                 )}
               </div>
 
               <div className="flex flex-col gap-2">
-                <h3 className="text-xs font-medium uppercase tracking-wide text-gray-500">Network</h3>
+                <h3 className="text-muted-foreground font-sans text-xs font-medium tracking-[0.12em] uppercase">
+                  Network
+                </h3>
                 {mainNetView ? (
                   <NetCard v={mainNetView} className="flex-1" />
                 ) : (
-                  <div className="text-sm text-gray-500">Loading…</div>
+                  <div className="text-muted-foreground text-sm">Loading…</div>
                 )}
               </div>
             </div>
@@ -832,84 +839,82 @@ function Overview(): JSX.Element {
         </>
       )}
 
-      <div className="my-6 h-px w-full bg-gray-200" />
+      <div className="bg-border my-6 h-px w-full" />
 
       {/* ---------- AC DHCP Leases ---------- */}
       <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <h2 className="text-lg font-semibold">DHCP Leases</h2>
+          <h2 className="text-lg font-semibold tracking-tight">DHCP Leases</h2>
         </div>
 
-        <button
+        <Button
+          variant="destructive"
+          size="sm"
           onClick={() => {
             void handleResetDhcp()
           }}
           disabled={resettingDhcp}
-          className={
-            'rounded px-3 py-2 text-sm text-white ' +
-            (resettingDhcp
-              ? 'cursor-not-allowed bg-gray-400'
-              : 'bg-red-600 hover:bg-red-700')
-          }
         >
           {resettingDhcp ? 'Resetting…' : 'Reset DHCP'}
-        </button>
+        </Button>
       </div>
 
       <div className="mb-4 grid grid-cols-1 gap-4 md:grid-cols-3">
-        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-          <div className="text-xs text-gray-500">Total Active Leases</div>
-          <div className="mt-1 text-3xl font-bold">{leaseTotal}</div>
-        </div>
+        <Panel>
+          <div className="text-muted-foreground text-xs tracking-wide uppercase">Total Active Leases</div>
+          <div className="font-display data mt-1 text-3xl font-semibold">{leaseTotal}</div>
+        </Panel>
 
-        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-          <div className="text-xs text-gray-500">Static Leases</div>
-          <div className="mt-1 text-3xl font-bold">{staticTotal}</div>
-        </div>
+        <Panel>
+          <div className="text-muted-foreground text-xs tracking-wide uppercase">Static Leases</div>
+          <div className="font-display data mt-1 text-3xl font-semibold">{staticTotal}</div>
+        </Panel>
 
-        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-          <div className="text-xs text-gray-500">Filtered Results</div>
-          <div className="mt-1 text-3xl font-bold">{filteredLeases.length}</div>
-        </div>
+        <Panel>
+          <div className="text-muted-foreground text-xs tracking-wide uppercase">Filtered Results</div>
+          <div className="font-display data mt-1 text-3xl font-semibold">{filteredLeases.length}</div>
+        </Panel>
       </div>
 
       <div className="mb-4">
-        <input
+        <Input
           value={leaseSearch}
           onChange={(e) => setLeaseSearch(e.target.value)}
-          placeholder="Search hostname, IP, MAC, or expiry..."
-          className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+          placeholder="Search hostname, IP, MAC, or expiry…"
         />
       </div>
 
-      <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+      <Panel>
         <div className="mb-3 flex items-center justify-between">
           <div>
-            <div className="text-base font-medium">{leaseView.name || 'Router'}</div>
-            <div className="text-xs text-gray-500">{leaseView.ip || 'DHCP Server'}</div>
+            <div className="font-display text-sm font-semibold tracking-tight">{leaseView.name || 'Router'}</div>
+            <div className="data text-muted-foreground text-xs">{leaseView.ip || 'DHCP Server'}</div>
           </div>
 
-          {leasesLoading && <div className="text-xs text-gray-400">Refreshing…</div>}
+          {leasesLoading && (
+            <div className="text-muted-foreground flex items-center gap-1.5 text-xs">
+              <span className="status-dot status-dot--live text-signal" />
+              Refreshing…
+            </div>
+          )}
         </div>
 
         {leaseView.error ? (
-          <div className="rounded-md bg-amber-50 p-2 text-xs text-amber-700">
-            Leases error: {leaseView.error}
-          </div>
+          <ErrorNote>Leases error: {leaseView.error}</ErrorNote>
         ) : filteredLeases.length === 0 ? (
-          <div className="text-sm text-gray-500">
+          <div className="text-muted-foreground text-sm">
             {leaseSearch.trim() ? 'No leases matched your search.' : 'No active leases.'}
           </div>
         ) : (
           <div className="max-h-96 overflow-auto">
             <table className="min-w-full text-xs">
-              <thead className="sticky top-0 bg-white text-gray-500">
-                <tr>
-                  <th className="py-1 pr-1 text-left">Hostname</th>
-                  <th className="px-1 py-1 text-left">IP</th>
-                  <th className="px-1 py-1 text-left">MAC</th>
-                  <th className="py-1 pl-1 text-left">Expires</th>
-                  <th className="py-1 pl-1 text-left">Static Lease</th>
+              <thead className="bg-card text-muted-foreground sticky top-0">
+                <tr className="border-border border-b">
+                  <th className="py-2 pr-2 text-left font-medium tracking-wide uppercase">Hostname</th>
+                  <th className="px-2 py-2 text-left font-medium tracking-wide uppercase">IP</th>
+                  <th className="px-2 py-2 text-left font-medium tracking-wide uppercase">MAC</th>
+                  <th className="py-2 pl-2 text-left font-medium tracking-wide uppercase">Expires</th>
+                  <th className="py-2 pl-2 text-left font-medium tracking-wide uppercase">Static Lease</th>
                 </tr>
               </thead>
               <tbody>
@@ -920,42 +925,35 @@ function Overview(): JSX.Element {
                   const disabled = !item.ip || !item.mac || pendingKey === k
 
                   return (
-                    <tr key={`${item.mac}-${item.ip}-${i2}`} className="border-t">
-                      <td className="py-1 pr-1">{item.hostname || '(unknown)'}</td>
-                      <td className="px-1 py-1">{item.ip}</td>
-                      <td className="break-all px-1 py-1">{item.mac}</td>
-                      <td className="py-1 pl-1">{item.expires}</td>
-                      <td className="py-1 pl-1">
+                    <tr key={`${item.mac}-${item.ip}-${i2}`} className="border-border/60 hover:bg-muted/40 border-t transition-colors">
+                      <td className="py-1.5 pr-2">{item.hostname || '(unknown)'}</td>
+                      <td className="data px-2 py-1.5">{item.ip}</td>
+                      <td className="data px-2 py-1.5 break-all">{item.mac}</td>
+                      <td className="data py-1.5 pl-2">{item.expires}</td>
+                      <td className="py-1.5 pl-2">
                         {isStatic ? (
-                          <button
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            className="h-7 px-2 text-xs"
                             disabled={disabled}
                             onClick={() => {
                               void handleUnsetStatic(item)
                             }}
-                            className={
-                              'rounded px-2 py-1 text-white ' +
-                              (disabled
-                                ? 'cursor-not-allowed bg-gray-400'
-                                : 'bg-red-600 hover:bg-red-700')
-                            }
                           >
                             {pendingKey === k ? 'Unsetting…' : 'Unset Static'}
-                          </button>
+                          </Button>
                         ) : (
-                          <button
+                          <Button
+                            size="sm"
+                            className="h-7 px-2 text-xs"
                             disabled={disabled}
                             onClick={() => {
                               void handleSetStatic(item)
                             }}
-                            className={
-                              'rounded px-2 py-1 text-white ' +
-                              (disabled
-                                ? 'cursor-not-allowed bg-gray-400'
-                                : 'bg-blue-600 hover:bg-blue-700')
-                            }
                           >
                             {pendingKey === k ? 'Setting…' : 'Set Static'}
-                          </button>
+                          </Button>
                         )}
                       </td>
                     </tr>
@@ -965,7 +963,7 @@ function Overview(): JSX.Element {
             </table>
           </div>
         )}
-      </div>
+      </Panel>
     </div>
   )
 }

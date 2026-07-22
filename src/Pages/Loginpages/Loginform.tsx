@@ -31,8 +31,8 @@ export function LoginForm({ className, ...props }: React.ComponentPropsWithoutRe
     <div className={cn('flex flex-col gap-6', className)} {...props}>
       <Card>
         <CardHeader>
-          <CardTitle className="text-2xl">Login</CardTitle>
-          <CardDescription>Enter your username and password below to login to your account</CardDescription>
+          <CardTitle className="text-2xl">Sign in</CardTitle>
+          <CardDescription>Use your device credentials to access the console.</CardDescription>
         </CardHeader>
         <CardContent>
           <form>
@@ -42,7 +42,6 @@ export function LoginForm({ className, ...props }: React.ComponentPropsWithoutRe
                 <Input
                   id="username"
                   type="username"
-                  placeholder="input username"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   required
@@ -61,12 +60,12 @@ export function LoginForm({ className, ...props }: React.ComponentPropsWithoutRe
                 />
               </div>
               {error && (
-                <div className="text-sm text-red-500 font-medium -mt-2">
+                <div className="text-sm text-destructive font-medium -mt-2">
                   {error}
                 </div>
               )}
               <Button type="submit" onClick={handleLogin} className="w-full">
-                Login
+                Sign in
               </Button>
             </div>
           </form>

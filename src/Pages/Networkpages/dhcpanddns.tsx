@@ -281,16 +281,11 @@ export default function DHCPandDNS(): JSX.Element {
     <div className="p-6 max-w-[1600px] mx-auto relative">
       <div className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight text-gray-900">Static DHCP Leases</h2>
+          <h2 className="text-3xl font-bold tracking-tight text-foreground">Static DHCP Leases</h2>
           <p className="text-sm text-muted-foreground mt-1">
             Manage fixed IPv4 assignments on the DHCP server.
           </p>
         </div>
-
-        <Button variant="outline" onClick={() => void loadAll()} className="gap-2">
-          <RefreshCw className={`h-4 w-4 ${view.loading ? 'animate-spin' : ''}`} />
-          Refresh
-        </Button>
       </div>
 
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -317,8 +312,8 @@ export default function DHCPandDNS(): JSX.Element {
         </Card>
       </div>
 
-      <div className="mb-6 flex items-center gap-2 rounded-xl border bg-white px-3 py-2 shadow-sm">
-        <Search className="h-4 w-4 text-gray-400" />
+      <div className="mb-6 flex items-center gap-2 rounded-xl border bg-card px-3 py-2 shadow-sm">
+        <Search className="h-4 w-4 text-muted-foreground" />
         <Input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -328,7 +323,7 @@ export default function DHCPandDNS(): JSX.Element {
       </div>
 
       <Card className="flex flex-col overflow-hidden shadow-sm">
-        <CardHeader className="border-b bg-muted/40 pb-4">
+        <CardHeader className="border-b border-border pb-4">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <div className="p-2 bg-primary/10 rounded-md">
@@ -364,7 +359,7 @@ export default function DHCPandDNS(): JSX.Element {
               <div className="flex-1 overflow-x-auto">
                 <Table>
                   <TableHeader>
-                    <TableRow className="bg-muted/20">
+                    <TableRow>
                       <TableHead>Hostname</TableHead>
                       <TableHead>MAC Address</TableHead>
                       <TableHead>IPv4 Address</TableHead>
@@ -401,11 +396,11 @@ export default function DHCPandDNS(): JSX.Element {
 
                           <TableCell className="text-right">
                             <Button
-                              variant="ghost"
-                              size="icon"
+                              variant="outline"
+                              size="sm"
                               onClick={() => triggerDelete(lease.section)}
                               disabled={view.loading}
-                              className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                              className="border-destructive/30 text-destructive hover:bg-destructive/10"
                             >
                               <Trash2 className="h-4 w-4" />
                             </Button>
@@ -417,7 +412,7 @@ export default function DHCPandDNS(): JSX.Element {
                 </Table>
               </div>
 
-              <div className="p-4 bg-muted/20 border-t mt-auto">
+              <div className="p-4 border-t border-border mt-auto">
                 <div className="flex items-center gap-2 mb-4">
                   <Plus className="h-4 w-4 text-primary" />
                   <h4 className="text-sm font-semibold text-foreground">Add Static Lease</h4>

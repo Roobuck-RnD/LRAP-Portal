@@ -17,11 +17,12 @@ import (
 // - newHTTPClient
 
 type MemoryInfo struct {
-	Total     int64 `json:"total"`      // KiB
-	Available int64 `json:"available"`  // KiB
-	Used      int64 `json:"used"`       // KiB (Total - Available)
-	Buffered  int64 `json:"buffered"`   // KiB
-	Cached    int64 `json:"cached"`     // KiB
+	// ubus system.info reports these in BYTES (passed through unconverted below).
+	Total     int64 `json:"total"`      // bytes
+	Available int64 `json:"available"`  // bytes
+	Used      int64 `json:"used"`       // bytes (Total - Available)
+	Buffered  int64 `json:"buffered"`   // bytes
+	Cached    int64 `json:"cached"`     // bytes
 }
 
 // GET /api/status/overview/memory[?ip=10.10.18.X]

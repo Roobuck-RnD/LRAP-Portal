@@ -3,6 +3,7 @@
 import * as React from 'react'
 import { useEffect } from 'react'
 import { Bot, Settings2, SquareTerminal, Map, Router } from 'lucide-react'
+import { SignalMark } from '@/components/signal-mark'
 import { NavMain } from '@/components/nav-main'
 import { NavUser } from '@/components/nav-user'
 import {
@@ -138,11 +139,14 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild>
               <a href="#">
-                <div className="bg-sidebar-primary text-sidebar-primary-foreground flex aspect-square size-8 items-center justify-center rounded-lg">
-                  <Router className="size-4" />
+                <div className="ring-sidebar-border flex aspect-square size-9 items-center justify-center rounded-md bg-sidebar-accent ring-1">
+                  <SignalMark className="size-5" id="brand-signal" />
                 </div>
                 <div className="flex flex-col gap-0.5 leading-none">
-                  <span className="font-medium">Roobuck</span>
+                  <span className="font-display text-[0.95rem] font-semibold tracking-tight">Roobuck</span>
+                  <span className="text-muted-foreground text-[0.65rem] font-medium tracking-[0.14em] uppercase">
+                    Console
+                  </span>
                 </div>
               </a>
             </SidebarMenuButton>

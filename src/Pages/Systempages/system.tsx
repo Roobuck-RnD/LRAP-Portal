@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useCurrentAllModuleStore } from '@/states/allModuleState'
 import { apiFetch } from '@/utils/http'
+import { Button } from '@/components/ui/button'
 
 // ---------- Interfaces ----------
 
@@ -158,13 +159,13 @@ function SystemSettings(): JSX.Element {
     <div className="p-6">
       <div className="mx-auto max-w-3xl">
         <div className="mb-6">
-          <h2 className="text-2xl font-bold text-gray-800">System Properties</h2>
+          <h2 className="text-2xl font-bold text-foreground">System Properties</h2>
         </div>
 
-        <div className="flex flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-gray-100 bg-gray-50 px-4 py-3">
+        <div className="flex flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+          <div className="flex items-center justify-between border-b border-border bg-muted px-4 py-3">
             <div>
-              <h3 className="text-lg font-semibold text-gray-800">
+              <h3 className="text-lg font-semibold text-foreground">
                 {acModule?.name || config.hostname || 'Router'}
               </h3>
             </div>
@@ -172,17 +173,17 @@ function SystemSettings(): JSX.Element {
 
           <div className="space-y-4 p-5">
             {firstLoad ? (
-              <div className="text-sm text-gray-400">Loading settings...</div>
+              <div className="text-sm text-muted-foreground">Loading settings...</div>
             ) : (
               <>
                 {error && (
-                  <div className="rounded border border-red-100 bg-red-50 p-3 text-sm text-red-600">
+                  <div className="rounded border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
                     {error}
                   </div>
                 )}
 
                 {warnings.length > 0 && (
-                  <div className="rounded border border-amber-100 bg-amber-50 p-3 text-sm text-amber-700">
+                  <div className="rounded border border-warning/20 bg-warning/10 p-3 text-sm text-warning">
                     <div className="mb-1 font-medium">Warnings</div>
                     <ul className="list-disc space-y-1 pl-5">
                       {warnings.map((w, idx) => (
@@ -193,39 +194,39 @@ function SystemSettings(): JSX.Element {
                 )}
 
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-gray-500">
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">
                     Local Time
                   </label>
-                  <div className="flex w-full items-center justify-between rounded border border-gray-200 bg-gray-50 px-3 py-2 font-mono text-sm text-gray-700">
+                  <div className="flex w-full items-center justify-between rounded border border-border bg-muted px-3 py-2 font-mono text-sm text-foreground">
                     <span>{config.localtime}</span>
-                    <span className="h-2 w-2 animate-pulse rounded-full bg-green-400" />
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-success" />
                   </div>
-                  <p className="mt-1 text-xs text-gray-500">
+                  <p className="mt-1 text-xs text-muted-foreground">
                     Exact clock time still depends on NTP/system clock sync.
                   </p>
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-gray-500">
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">
                     Hostname
                   </label>
                   <input
                     type="text"
-                    className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                    className="w-full rounded border border-border px-3 py-2 text-sm focus:border-ring focus:outline-none"
                     value={config.hostname}
                     onChange={(e) => setConfig({ ...config, hostname: e.target.value })}
                   />
-                  <p className="mt-1 text-xs text-gray-500">
+                  <p className="mt-1 text-xs text-muted-foreground">
                     This name identifies the device across the interface.
                   </p>
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-gray-500">
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">
                     Timezone
                   </label>
                   <select
-                    className="w-full rounded border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                    className="w-full rounded border border-border bg-card px-3 py-2 text-sm focus:border-ring focus:outline-none"
                     value={config.timezone}
                     onChange={(e) => setConfig({ ...config, timezone: e.target.value })}
                   >
@@ -239,7 +240,7 @@ function SystemSettings(): JSX.Element {
                       </option>
                     ))}
                   </select>
-                  <p className="mt-1 text-xs text-gray-500">
+                  <p className="mt-1 text-xs text-muted-foreground">
                     Sets the system timezone.
                   </p>
                 </div>
@@ -247,16 +248,10 @@ function SystemSettings(): JSX.Element {
             )}
           </div>
 
-          <div className="border-t border-gray-100 bg-gray-50 px-4 py-3 text-right">
-            <button
-              onClick={handleSave}
-              disabled={saving || firstLoad}
-              className={`rounded px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors ${
-                saving ? 'cursor-not-allowed bg-blue-400' : 'bg-blue-600 hover:bg-blue-700'
-              }`}
-            >
-              {saving ? 'Saving...' : 'Save'}
-            </button>
+          <div className="border-t border-border bg-muted px-4 py-3 text-right">
+            <Button onClick={handleSave} disabled={saving || firstLoad}>
+              {saving ? 'Saving…' : 'Save'}
+            </Button>
           </div>
         </div>
       </div>
