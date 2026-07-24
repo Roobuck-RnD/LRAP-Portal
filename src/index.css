@@ -71,6 +71,52 @@
 :root {
   --radius: 0.375rem;
 
+  --background: #f4f7fb;
+  --foreground: #172033;
+  --card: #ffffff;
+  --card-foreground: #172033;
+  --popover: #ffffff;
+  --popover-foreground: #172033;
+
+  --primary: #2563eb;
+  --primary-foreground: #ffffff;
+  --secondary: #e9eff8;
+  --secondary-foreground: #263650;
+  --muted: #edf2f8;
+  --muted-foreground: #647188;
+  --accent: #e3ecfa;
+  --accent-foreground: #18345f;
+  --destructive: #e11d48;
+
+  --border: #d8e0eb;
+  --input: #d2dce9;
+  --ring: #2563eb;
+
+  --chart-1: #2563eb;
+  --chart-2: #0891b2;
+  --chart-3: #059669;
+  --chart-4: #d97706;
+  --chart-5: #7c3aed;
+
+  --sidebar: #edf3fa;
+  --sidebar-foreground: #33415c;
+  --sidebar-primary: #2563eb;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #dce7f5;
+  --sidebar-accent-foreground: #19365f;
+  --sidebar-border: #d5dfec;
+  --sidebar-ring: #2563eb;
+
+  --signal: #0e7490;
+  --success: #047857;
+  --warning: #b45309;
+  --online: #047857;
+  --offline: #64748b;
+}
+
+.dark {
+  --radius: 0.375rem;
+
   --background: #0a0f1a;   /* deep indigo-black base */
   --foreground: #e6edf7;
 
@@ -121,6 +167,10 @@
   }
 
   html {
+    color-scheme: light;
+  }
+
+  html.dark {
     color-scheme: dark;
   }
 
@@ -128,6 +178,9 @@
     @apply bg-background text-foreground font-sans antialiased;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    transition:
+      background-color 180ms ease,
+      color 180ms ease;
   }
 
   /* Display face for headings — set with a little negative tracking so it
@@ -152,7 +205,7 @@
      bg/border classes still win via higher specificity, so styled controls are
      unaffected — this only catches the unstyled ones. */
   select:not([class*='bg-']) {
-    background-color: var(--input);
+    background-color: var(--card);
     color: var(--foreground);
     border-color: var(--border);
   }
@@ -219,6 +272,35 @@
   .status-dot--live {
     animation: signal-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   }
+
+  .login-grid {
+    background-image:
+      linear-gradient(color-mix(in oklab, var(--primary) 6%, transparent) 1px, transparent 1px),
+      linear-gradient(90deg, color-mix(in oklab, var(--primary) 6%, transparent) 1px, transparent 1px);
+    background-size: 52px 52px;
+    mask-image: radial-gradient(ellipse 85% 75% at 48% 45%, black 15%, transparent 78%);
+  }
+
+  .login-topology::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(110deg, transparent 25%, color-mix(in oklab, var(--signal) 6%, transparent) 48%, transparent 70%);
+    transform: translateX(-100%);
+    animation: login-scan 7s ease-in-out infinite;
+  }
+
+  .login-route-flow {
+    stroke-dasharray: 0.08 0.92;
+    animation: login-route-flow 4s linear infinite;
+  }
+
+  .login-node-pulse {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: login-node-pulse 3.2s ease-in-out infinite;
+  }
 }
 
 @keyframes signal-pulse {
@@ -230,8 +312,29 @@
   }
 }
 
+@keyframes login-route-flow {
+  from { stroke-dashoffset: 1; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes login-node-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.35); }
+}
+
+@keyframes login-scan {
+  0%, 15% { transform: translateX(-100%); }
+  55%, 100% { transform: translateX(100%); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .status-dot--live {
+    animation: none;
+  }
+
+  .login-route-flow,
+  .login-node-pulse,
+  .login-topology::after {
     animation: none;
   }
 }

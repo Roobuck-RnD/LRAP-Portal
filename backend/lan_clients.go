@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -16,6 +17,7 @@ import (
 // 保留 port/mac/ip/hostname，兼容你当前前端
 // 新增 type/online，建议前端后续直接用 type 判断主模块/子模块
 type LanClient struct {
+	ModuleID string `json:"module_id"`
 	Port     string `json:"port"`
 	MAC      string `json:"mac"`
 	IP       string `json:"ip"`
@@ -279,6 +281,7 @@ func lanClientsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 3) 主模块自己
 	main := LanClient{
+		ModuleID: managedMainModuleID,
 		Port:     "br-lan",
 		MAC:      getBridgeMAC(sid),
 		IP:       pickLanIPv4(sid),
@@ -322,6 +325,7 @@ func lanClientsHandler(w http.ResponseWriter, r *http.Request) {
 		portN := lanPortNumber(port)
 
 		client := LanClient{
+			ModuleID: managedAntennaModuleID(portN),
 			Port:     port,
 			MAC:      mac,
 			IP:       ip,
@@ -351,6 +355,18 @@ func lanClientsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	wg.Wait()
+
+	// Product order follows physical identity, never the transient management IP:
+	// Router, Antenna1/lan1, ..., Antenna4/lan4. Unknown identities are kept at
+	// the end with IP as a deterministic compatibility fallback.
+	sort.SliceStable(finalOut, func(i, j int) bool {
+		left := managedModuleDisplaySortKey(finalOut[i].ModuleID, finalOut[i].Type, finalOut[i].Port, finalOut[i].IP)
+		right := managedModuleDisplaySortKey(finalOut[j].ModuleID, finalOut[j].Type, finalOut[j].Port, finalOut[j].IP)
+		if left != right {
+			return left < right
+		}
+		return finalOut[i].IP < finalOut[j].IP
+	})
 
 	_ = json.NewEncoder(w).Encode(finalOut)
 }

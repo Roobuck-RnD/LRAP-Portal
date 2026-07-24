@@ -7,6 +7,10 @@ import { apiFetch } from '@/utils/http'
 import { confirmDialog } from '@/components/ui/confirm'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { PageHeader, PageShell, StatCard } from '@/components/page'
+import { FullScreenTaskOverlay } from '@/components/task-overlay'
+import { Table } from '@/components/ui/table'
+import { getPageDataCache, setPageDataCache } from '@/utils/page-data-cache'
 
 // ---------- helpers (memory UI) ----------
 // ubus system.info reports memory in BYTES, so convert bytes -> MiB (GiB once large).
@@ -123,6 +127,11 @@ type StaticView = {
 }
 
 const RESERVED_AP_DHCP_IPS = new Set(['10.10.18.2', '10.10.18.3', '10.10.18.4', '10.10.18.5'])
+const OVERVIEW_SYSTEM_CACHE_KEY = 'status.overview.system'
+const OVERVIEW_MEMORY_CACHE_KEY = 'status.overview.memory'
+const OVERVIEW_NETWORK_CACHE_KEY = 'status.overview.network'
+const OVERVIEW_LEASES_CACHE_KEY = 'status.overview.leases'
+const OVERVIEW_STATIC_CACHE_KEY = 'status.overview.static-map'
 
 function isReservedAPLease(lease: LeaseInfo): boolean {
   return RESERVED_AP_DHCP_IPS.has(String(lease.ip || '').trim())
@@ -261,19 +270,31 @@ function Overview(): JSX.Element {
   const { currentAllModule } = useCurrentAllModuleStore()
   const { devMode } = useDevModeStore()
 
-  const [sysViews, setSysViews] = useState<SysView[]>([])
-  const [memViews, setMemViews] = useState<MemView[]>([])
-  const [netViews, setNetViews] = useState<NetView[]>([])
+  const [sysViews, setSysViews] = useState<SysView[]>(
+    () => getPageDataCache<SysView[]>(OVERVIEW_SYSTEM_CACHE_KEY) ?? []
+  )
+  const [memViews, setMemViews] = useState<MemView[]>(
+    () => getPageDataCache<MemView[]>(OVERVIEW_MEMORY_CACHE_KEY) ?? []
+  )
+  const [netViews, setNetViews] = useState<NetView[]>(
+    () => getPageDataCache<NetView[]>(OVERVIEW_NETWORK_CACHE_KEY) ?? []
+  )
 
   // AC-only DHCP state
-  const [leaseView, setLeaseView] = useState<LeaseView>({
-    name: 'Router',
-    leases: []
-  })
-  const [staticView, setStaticView] = useState<StaticView>({
-    name: 'Router',
-    statics: {}
-  })
+  const [leaseView, setLeaseView] = useState<LeaseView>(
+    () =>
+      getPageDataCache<LeaseView>(OVERVIEW_LEASES_CACHE_KEY) ?? {
+        name: 'Router',
+        leases: []
+      }
+  )
+  const [staticView, setStaticView] = useState<StaticView>(
+    () =>
+      getPageDataCache<StaticView>(OVERVIEW_STATIC_CACHE_KEY) ?? {
+        name: 'Router',
+        statics: {}
+      }
+  )
   const [leaseSearch, setLeaseSearch] = useState('')
   const [leasesLoading, setLeasesLoading] = useState(false)
   const [resettingDhcp, setResettingDhcp] = useState(false)
@@ -283,7 +304,7 @@ function Overview(): JSX.Element {
 
   const moduleKey = useMemo(() => {
     return currentAllModule
-      .map((m) => `${m.type || ''}:${m.ipaddress || ''}:${m.name || ''}`)
+      .map((m) => `${m.module_id || ''}:${m.port || ''}:${m.type || ''}:${m.ipaddress || ''}:${m.name || ''}`)
       .join('|')
   }, [currentAllModule])
 
@@ -337,20 +358,23 @@ function Overview(): JSX.Element {
           ? leases.filter((lease) => !isReservedAPLease(lease))
           : []
 
-        setLeaseView({
+        const nextLeaseView: LeaseView = {
           name: mainModule?.name || 'Router',
           ip: mainModule?.ipaddress,
           leases: visibleLeases
-        })
+        }
+        setPageDataCache(OVERVIEW_LEASES_CACHE_KEY, nextLeaseView)
+        setLeaseView(nextLeaseView)
       } catch (e) {
         if (cancelledRef?.cancelled) return
 
         console.error('AC leases fetch failed:', e)
-        setLeaseView({
-          name: mainModule?.name || 'Router',
-          ip: mainModule?.ipaddress,
+        setLeaseView((prev) => ({
+          ...prev,
+          name: mainModule?.name || prev.name || 'Router',
+          ip: mainModule?.ipaddress || prev.ip,
           error: String(e)
-        })
+        }))
       } finally {
         if (!cancelledRef?.cancelled) {
           setLeasesLoading(false)
@@ -384,20 +408,23 @@ function Overview(): JSX.Element {
 
         if (cancelledRef?.cancelled) return
 
-        setStaticView({
+        const nextStaticView: StaticView = {
           name: mainModule?.name || 'Router',
           ip: mainModule?.ipaddress,
           statics: mapObj
-        })
+        }
+        setPageDataCache(OVERVIEW_STATIC_CACHE_KEY, nextStaticView)
+        setStaticView(nextStaticView)
       } catch (e) {
         if (cancelledRef?.cancelled) return
 
         console.error('Static map fetch failed:', e)
-        setStaticView({
-          name: mainModule?.name || 'Router',
-          ip: mainModule?.ipaddress,
+        setStaticView((prev) => ({
+          ...prev,
+          name: mainModule?.name || prev.name || 'Router',
+          ip: mainModule?.ipaddress || prev.ip,
           error: String(e)
-        })
+        }))
       }
     },
     [mainModule?.ipaddress, mainModule?.name]
@@ -406,10 +433,6 @@ function Overview(): JSX.Element {
   // ---------- overview polling ----------
   useEffect(() => {
     if (!currentAllModule || currentAllModule.length === 0) {
-      setSysViews([])
-      setMemViews([])
-      setNetViews([])
-      setLeaseView({ name: 'Router', leases: [] })
       return
     }
 
@@ -419,125 +442,134 @@ function Overview(): JSX.Element {
     const fetchAll = async () => {
       const modulesSnapshot = [...currentAllModule]
 
-      // ---- System ----
-      const sysResults = await Promise.allSettled(
-        modulesSnapshot.map(async (m) => {
-          const qs = buildQueryForModule(m)
-          const who = `${m.name}${qs ? ` ${qs}` : ''}`
-          const sys = await fetchJSON<SysInfo>(`/api/status/overview/system${qs}`, `${who} /system`)
+      // System, memory and network are independent. Start all three groups at
+      // once and publish one coherent snapshot after the slowest group settles.
+      // The previous sequential flow made the Overview cards appear in stages.
+      const [sysResults, memResults, netResults] = await Promise.all([
+        Promise.allSettled(
+          modulesSnapshot.map(async (m) => {
+            const qs = buildQueryForModule(m)
+            const who = `${m.name}${qs ? ` ${qs}` : ''}`
+            const sys = await fetchJSON<SysInfo>(
+              `/api/status/overview/system${qs}`,
+              `${who} /system`
+            )
 
-          return {
-            name: m.name || '(unknown)',
-            ip: m.ipaddress,
-            sys
-          } as SysView
-        })
-      )
+            return {
+              name: m.name || '(unknown)',
+              ip: m.ipaddress,
+              sys
+            } as SysView
+          })
+        ),
+        Promise.allSettled(
+          modulesSnapshot.map(async (m) => {
+            const qs = buildQueryForModule(m)
+            const who = `${m.name}${qs ? ` ${qs}` : ''}`
+            const mem = await fetchJSON<MemoryInfo>(
+              `/api/status/overview/memory${qs}`,
+              `${who} /memory`
+            )
+
+            return {
+              name: m.name || '(unknown)',
+              ip: m.ipaddress,
+              mem
+            } as MemView
+          })
+        ),
+        Promise.allSettled(
+          modulesSnapshot.map(async (m) => {
+            const qs = buildQueryForModule(m)
+            const who = `${m.name}${qs ? ` ${qs}` : ''}`
+            const net = await fetchJSON<NetworkInfo>(
+              `/api/status/overview/network${qs}`,
+              `${who} /network`
+            )
+
+            return {
+              name: m.name || '(unknown)',
+              ip: m.ipaddress,
+              net
+            } as NetView
+          })
+        )
+      ])
 
       if (cancelled) return
 
-      const sysOk: SysView[] = []
-      const sysErr: SysView[] = []
-
-      sysResults.forEach((r, i) => {
+      const nextSysViews = sysResults.map((r, i): SysView => {
         const m = modulesSnapshot[i]
         if (r.status === 'fulfilled') {
-          sysOk.push(r.value)
-        } else {
-          console.error('System fetch failed:', m?.name, r.reason)
-          sysErr.push({
-            name: m?.name ?? `#${i}`,
-            ip: m?.ipaddress,
-            error: String(r.reason)
-          })
+          return r.value
+        }
+
+        console.error('System fetch failed:', m?.name, r.reason)
+        const previous = getPageDataCache<SysView[]>(OVERVIEW_SYSTEM_CACHE_KEY)?.find(
+          (view) => view.ip === m?.ipaddress
+        )
+        if (previous?.sys) {
+          return { ...previous, error: String(r.reason) }
+        }
+        return {
+          name: m?.name ?? `#${i}`,
+          ip: m?.ipaddress,
+          error: String(r.reason)
         }
       })
 
-      setSysViews([...sysOk, ...sysErr])
-
-      // ---- Memory ----
-      const memResults = await Promise.allSettled(
-        modulesSnapshot.map(async (m) => {
-          const qs = buildQueryForModule(m)
-          const who = `${m.name}${qs ? ` ${qs}` : ''}`
-          const mem = await fetchJSON<MemoryInfo>(
-            `/api/status/overview/memory${qs}`,
-            `${who} /memory`
-          )
-
-          return {
-            name: m.name || '(unknown)',
-            ip: m.ipaddress,
-            mem
-          } as MemView
-        })
-      )
-
-      if (cancelled) return
-
-      const memOk: MemView[] = []
-      const memErr: MemView[] = []
-
-      memResults.forEach((r, i) => {
+      const nextMemViews = memResults.map((r, i): MemView => {
         const m = modulesSnapshot[i]
         if (r.status === 'fulfilled') {
-          memOk.push(r.value)
-        } else {
-          console.error('Memory fetch failed:', m?.name, r.reason)
-          memErr.push({
-            name: m?.name ?? `#${i}`,
-            ip: m?.ipaddress,
-            error: String(r.reason)
-          })
+          return r.value
+        }
+
+        console.error('Memory fetch failed:', m?.name, r.reason)
+        const previous = getPageDataCache<MemView[]>(OVERVIEW_MEMORY_CACHE_KEY)?.find(
+          (view) => view.ip === m?.ipaddress
+        )
+        if (previous?.mem) {
+          return { ...previous, error: String(r.reason) }
+        }
+        return {
+          name: m?.name ?? `#${i}`,
+          ip: m?.ipaddress,
+          error: String(r.reason)
         }
       })
 
-      setMemViews([...memOk, ...memErr])
-
-      // ---- Network ----
-      const netResults = await Promise.allSettled(
-        modulesSnapshot.map(async (m) => {
-          const qs = buildQueryForModule(m)
-          const who = `${m.name}${qs ? ` ${qs}` : ''}`
-          const net = await fetchJSON<NetworkInfo>(
-            `/api/status/overview/network${qs}`,
-            `${who} /network`
-          )
-
-          return {
-            name: m.name || '(unknown)',
-            ip: m.ipaddress,
-            net
-          } as NetView
-        })
-      )
-
-      if (cancelled) return
-
-      const netOk: NetView[] = []
-      const netErr: NetView[] = []
-
-      netResults.forEach((r, i) => {
+      const nextNetViews = netResults.map((r, i): NetView => {
         const m = modulesSnapshot[i]
         if (r.status === 'fulfilled') {
-          netOk.push(r.value)
-        } else {
-          console.error('Network fetch failed:', m?.name, r.reason)
-          netErr.push({
-            name: m?.name ?? `#${i}`,
-            ip: m?.ipaddress,
-            error: String(r.reason)
-          })
+          return r.value
+        }
+
+        console.error('Network fetch failed:', m?.name, r.reason)
+        const previous = getPageDataCache<NetView[]>(OVERVIEW_NETWORK_CACHE_KEY)?.find(
+          (view) => view.ip === m?.ipaddress
+        )
+        if (previous?.net) {
+          return { ...previous, error: String(r.reason) }
+        }
+        return {
+          name: m?.name ?? `#${i}`,
+          ip: m?.ipaddress,
+          error: String(r.reason)
         }
       })
 
-      setNetViews([...netOk, ...netErr])
+      setPageDataCache(OVERVIEW_SYSTEM_CACHE_KEY, nextSysViews)
+      setPageDataCache(OVERVIEW_MEMORY_CACHE_KEY, nextMemViews)
+      setPageDataCache(OVERVIEW_NETWORK_CACHE_KEY, nextNetViews)
+      setSysViews(nextSysViews)
+      setMemViews(nextMemViews)
+      setNetViews(nextNetViews)
 
       await loadACLeases({ cancelled })
     }
 
     const tick = async () => {
-      if (inFlight || cancelled) return
+      if (document.visibilityState !== 'visible' || inFlight || cancelled) return
 
       inFlight = true
       try {
@@ -550,10 +582,17 @@ function Overview(): JSX.Element {
     void tick()
 
     const timer: ReturnType<typeof setInterval> = setInterval(tick, 5000)
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void tick()
+      }
+    }
+    document.addEventListener('visibilitychange', refreshWhenVisible)
 
     return () => {
       cancelled = true
       clearInterval(timer)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
     }
   }, [buildQueryForModule, currentAllModule, fetchJSON, loadACLeases])
 
@@ -703,11 +742,11 @@ function Overview(): JSX.Element {
   const mainNetView = visibleNetViews[0]
 
   return (
-    <div className="relative p-4">
+    <PageShell size="full" className="relative">
+      <PageHeader title="Overview" description="Live system health, network status and DHCP activity across the managed gateway." />
       {/* ---------- Fullscreen Overlay ---------- */}
       {isConfiguring && (
-        <div className="bg-background/70 fixed inset-0 z-50 flex flex-col items-center justify-center backdrop-blur-sm transition-opacity">
-          <div className="border-border bg-card animate-bounce-in flex flex-col items-center rounded-lg border p-8 shadow-2xl">
+        <FullScreenTaskOverlay>
             <svg
               className="text-primary mb-4 h-10 w-10 animate-spin"
               xmlns="http://www.w3.org/2000/svg"
@@ -736,8 +775,7 @@ function Overview(): JSX.Element {
               <br />
               Please wait.
             </p>
-          </div>
-        </div>
+        </FullScreenTaskOverlay>
       )}
 
       {devMode ? (
@@ -860,20 +898,9 @@ function Overview(): JSX.Element {
       </div>
 
       <div className="mb-4 grid grid-cols-1 gap-4 md:grid-cols-3">
-        <Panel>
-          <div className="text-muted-foreground text-xs tracking-wide uppercase">Total Active Leases</div>
-          <div className="font-display data mt-1 text-3xl font-semibold">{leaseTotal}</div>
-        </Panel>
-
-        <Panel>
-          <div className="text-muted-foreground text-xs tracking-wide uppercase">Static Leases</div>
-          <div className="font-display data mt-1 text-3xl font-semibold">{staticTotal}</div>
-        </Panel>
-
-        <Panel>
-          <div className="text-muted-foreground text-xs tracking-wide uppercase">Filtered Results</div>
-          <div className="font-display data mt-1 text-3xl font-semibold">{filteredLeases.length}</div>
-        </Panel>
+        <StatCard label="Total Active Leases" value={leaseTotal} />
+        <StatCard label="Static Leases" value={staticTotal} />
+        <StatCard label="Filtered Results" value={filteredLeases.length} />
       </div>
 
       <div className="mb-4">
@@ -907,7 +934,7 @@ function Overview(): JSX.Element {
           </div>
         ) : (
           <div className="max-h-96 overflow-auto">
-            <table className="min-w-full text-xs">
+            <Table className="min-w-full text-xs">
               <thead className="bg-card text-muted-foreground sticky top-0">
                 <tr className="border-border border-b">
                   <th className="py-2 pr-2 text-left font-medium tracking-wide uppercase">Hostname</th>
@@ -960,11 +987,11 @@ function Overview(): JSX.Element {
                   )
                 })}
               </tbody>
-            </table>
+            </Table>
           </div>
         )}
       </Panel>
-    </div>
+    </PageShell>
   )
 }
 

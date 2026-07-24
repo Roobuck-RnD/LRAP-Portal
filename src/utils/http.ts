@@ -1,5 +1,6 @@
 import { toast } from 'sonner';
 import useDevModeStore from '@/states/devModeState';
+import { clearPageDataCache } from '@/utils/page-data-cache';
 
 export const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -42,11 +43,22 @@ export async function apiFetch(path: string, init?: RequestInit) {
 }
 
 function handleUnauthorized() {
+  // During the non-cancellable reboot screen the old ubus session will
+  // naturally disappear when the AC restarts. Keep the in-memory countdown
+  // visible; the reboot page clears auth and navigates to login at its deadline.
+  if (
+    sessionStorage.getItem('rebootPending') === 'true' ||
+    sessionStorage.getItem('wifiApplyPending') === 'true'
+  ) {
+    return;
+  }
+
   const wasLoggedIn = sessionStorage.getItem('isLoggedIn') === 'true';
 
   sessionStorage.removeItem('isLoggedIn');
   sessionStorage.removeItem('token');
   sessionStorage.removeItem('username');
+  clearPageDataCache();
 
   // token 过期只改 hash、不整页刷新,内存态不会自动清,所以显式退出开发者模式。
   useDevModeStore.getState().setDevMode(false);

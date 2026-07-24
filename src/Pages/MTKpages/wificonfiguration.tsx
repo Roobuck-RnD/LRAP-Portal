@@ -1,5 +1,6 @@
 import type { JSX } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { useCurrentAllModuleStore } from '@/states/allModuleState'
 import { apiFetch } from '@/utils/http'
 import { confirmDialog } from '@/components/ui/confirm'
@@ -7,14 +8,22 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Wifi, Save, AlertCircle, CheckCircle2, RadioTower, Settings2, Power, Eye, EyeOff } from 'lucide-react'
+import { NativeSelect } from '@/components/ui/native-select'
+import { Table } from '@/components/ui/table'
+import { PageHeader, PageShell } from '@/components/page'
+import { FullScreenTaskOverlay } from '@/components/task-overlay'
+import { clearPageDataCache, getPageDataCache, setPageDataCache } from '@/utils/page-data-cache'
+import { Wifi, Save, AlertCircle, CheckCircle2, RadioTower, Settings2, Power, Eye, EyeOff, AlertTriangle } from 'lucide-react'
 
 // ---------- Types ----------
 
 interface WifiModuleRadio {
+  module_id: string
   name: string
   type: 'main' | 'ap' | string
   ip: string
+  port?: string
+  identity_ready: boolean
   online: boolean
 
   channel_2g: string
@@ -29,7 +38,7 @@ interface WifiModuleRadio {
   radio_enabled_2g: boolean
   radio_enabled_5g: boolean
 
-  // Current interface state. It may briefly differ from desired state after wifi restart/reboot until the main module enforcer runs.
+  // Current interface state. It may briefly differ from desired state after wifi reload/reboot until the main module enforcer runs.
   radio_running_2g?: boolean
   radio_running_5g?: boolean
 
@@ -57,20 +66,8 @@ interface WifiSyncTargetResult {
 interface WifiSyncResponse {
   status: string
   results?: WifiSyncTargetResult[]
-}
-
-interface WifiRadioToggleResponse {
-  status: string
-  result?: WifiSyncTargetResult
-  state?: {
-    radio_2g_enabled: boolean
-    radio_5g_enabled: boolean
-    updated_at?: number
-  }
-  runtime?: {
-    radio_2g_running: boolean
-    radio_5g_running: boolean
-  }
+  apply_after_seconds?: number
+  estimated_seconds?: number
 }
 
 type RadioBand = '2g' | '5g'
@@ -84,8 +81,12 @@ type RadioPatch = Partial<
     | 'channel_5g'
     | 'channel_width_5g'
     | 'tx_power_5g'
+    | 'radio_enabled_2g'
+    | 'radio_enabled_5g'
   >
 >
+
+type WifiApplyPhase = 'idle' | 'submitting' | 'countdown'
 
 const emptyConfig: WifiConfig = {
   ssid_2g: '',
@@ -94,6 +95,9 @@ const emptyConfig: WifiConfig = {
   pass_5g: '',
   modules: []
 }
+
+const WIFI_CONFIG_CACHE_KEY = 'mtk.wifi'
+const DEFAULT_WIFI_APPLY_SECONDS = 45
 
 const channelOptions2G = [
   { value: '0', label: 'Channel 0 (Auto)' },
@@ -209,10 +213,19 @@ function validateWifiConfig(config: WifiConfig): string | null {
 }
 
 function normalizeRadioModule(mod: Partial<WifiModuleRadio>): WifiModuleRadio {
+  const type = mod.type || 'ap'
+  const moduleID = mod.module_id || (type === 'main' ? 'main' : '')
+
   return {
+    module_id: moduleID,
     name: mod.name || 'Unknown Device',
-    type: mod.type || 'ap',
+    type,
     ip: mod.ip || '',
+    port: mod.port,
+    identity_ready:
+      typeof mod.identity_ready === 'boolean'
+        ? mod.identity_ready
+        : type === 'main' || Boolean(moduleID),
     online: mod.online !== false,
 
     channel_2g: String(mod.channel_2g ?? mod.channel ?? '0'),
@@ -232,18 +245,75 @@ function normalizeRadioModule(mod: Partial<WifiModuleRadio>): WifiModuleRadio {
   }
 }
 
-export default function WiFiConfiguration(): JSX.Element {
-  const { currentAllModule } = useCurrentAllModuleStore()
+function buildWifiPayload(config: WifiConfig): WifiConfig {
+  return {
+    ssid_2g: config.ssid_2g.trim(),
+    pass_2g: config.pass_2g,
+    ssid_5g: config.ssid_5g.trim(),
+    pass_5g: config.pass_5g,
+    modules: (config.modules || []).map((m) => ({
+      ...m,
+      channel_2g: String(m.channel_2g),
+      channel_width_2g: m.channel_width_2g,
+      tx_power_2g: Number(m.tx_power_2g),
+      channel_5g: String(m.channel_5g),
+      channel_width_5g: m.channel_width_5g,
+      tx_power_5g: Number(m.tx_power_5g),
+      radio_enabled_2g: Boolean(m.radio_enabled_2g),
+      radio_enabled_5g: Boolean(m.radio_enabled_5g)
+    }))
+  }
+}
 
-  const [config, setConfig] = useState<WifiConfig>(emptyConfig)
-  const [loading, setLoading] = useState(true)
+function wifiConfigSignature(config: WifiConfig): string {
+  const normalized = buildWifiPayload(config)
+
+  return JSON.stringify({
+    ssid_2g: normalized.ssid_2g,
+    pass_2g: normalized.pass_2g,
+    ssid_5g: normalized.ssid_5g,
+    pass_5g: normalized.pass_5g,
+    modules: (normalized.modules || []).map((m) => ({
+      module_id: m.module_id,
+      type: m.type,
+      channel_2g: m.channel_2g,
+      channel_width_2g: m.channel_width_2g,
+      tx_power_2g: m.tx_power_2g,
+      channel_5g: m.channel_5g,
+      channel_width_5g: m.channel_width_5g,
+      tx_power_5g: m.tx_power_5g,
+      radio_enabled_2g: m.radio_enabled_2g,
+      radio_enabled_5g: m.radio_enabled_5g
+    }))
+  })
+}
+
+export default function WiFiConfiguration(): JSX.Element {
+  const navigate = useNavigate()
+  const { currentAllModule, updateCurrentAllModule } = useCurrentAllModuleStore()
+  const [cachedAtMount] = useState<WifiConfig | undefined>(() =>
+    getPageDataCache<WifiConfig>(WIFI_CONFIG_CACHE_KEY)
+  )
+
+  const [config, setConfig] = useState<WifiConfig>(() => cachedAtMount ?? emptyConfig)
+  const [savedConfig, setSavedConfig] = useState<WifiConfig>(() => cachedAtMount ?? emptyConfig)
+  const [loading, setLoading] = useState(() => cachedAtMount === undefined)
   const [saving, setSaving] = useState(false)
-  const [togglingRadioKey, setTogglingRadioKey] = useState<string | null>(null)
+  const [applyPhase, setApplyPhase] = useState<WifiApplyPhase>('idle')
+  const [applyDeadline, setApplyDeadline] = useState<number | null>(null)
+  const [applyCountdown, setApplyCountdown] = useState(DEFAULT_WIFI_APPLY_SECONDS)
+  const [applyTotal, setApplyTotal] = useState(DEFAULT_WIFI_APPLY_SECONDS)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [syncResults, setSyncResults] = useState<WifiSyncTargetResult[]>([])
   const [show2g, setShow2g] = useState(false)
   const [show5g, setShow5g] = useState(false)
+  const hasRedirectedRef = useRef(false)
+
+  const hasChanges = useMemo(
+    () => wifiConfigSignature(config) !== wifiConfigSignature(savedConfig),
+    [config, savedConfig]
+  )
 
   const moduleNameByIP = useMemo(() => {
     const map = new Map<string, string>()
@@ -292,13 +362,16 @@ export default function WiFiConfiguration(): JSX.Element {
         }
       })
 
-      setConfig({
+      const nextConfig: WifiConfig = {
         ssid_2g: data.ssid_2g || '',
         pass_2g: data.pass_2g || '',
         ssid_5g: data.ssid_5g || '',
         pass_5g: data.pass_5g || '',
         modules
-      })
+      }
+      setPageDataCache(WIFI_CONFIG_CACHE_KEY, nextConfig)
+      setConfig(nextConfig)
+      setSavedConfig(nextConfig)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       setError(`Failed to load WiFi configuration: ${msg}`)
@@ -310,9 +383,71 @@ export default function WiFiConfiguration(): JSX.Element {
   }
 
   useEffect(() => {
-    void fetchWifi()
+    if (sessionStorage.getItem('wifiApplyPending') === 'true') return
+    void fetchWifi({ silent: cachedAtMount !== undefined })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    const warnAboutUnsavedChanges = (event: BeforeUnloadEvent) => {
+      if (!hasChanges || applyPhase !== 'idle') return
+      event.preventDefault()
+    }
+
+    window.addEventListener('beforeunload', warnAboutUnsavedChanges)
+    return () => window.removeEventListener('beforeunload', warnAboutUnsavedChanges)
+  }, [applyPhase, hasChanges])
+
+  useEffect(() => {
+    if (sessionStorage.getItem('wifiApplyPending') !== 'true') return
+
+    const storedDeadline = Number(sessionStorage.getItem('wifiApplyDeadline'))
+    const storedDuration = Number(sessionStorage.getItem('wifiApplyDuration'))
+    if (!Number.isFinite(storedDeadline) || storedDeadline <= Date.now()) {
+      sessionStorage.removeItem('wifiApplyPending')
+      sessionStorage.removeItem('wifiApplyDeadline')
+      sessionStorage.removeItem('wifiApplyDuration')
+      return
+    }
+
+    const duration =
+      Number.isFinite(storedDuration) && storedDuration >= 10
+        ? Math.ceil(storedDuration)
+        : DEFAULT_WIFI_APPLY_SECONDS
+    setLoading(false)
+    setSaving(true)
+    setApplyTotal(duration)
+    setApplyDeadline(storedDeadline)
+    setApplyCountdown(Math.max(0, Math.ceil((storedDeadline - Date.now()) / 1000)))
+    setApplyPhase('countdown')
+  }, [])
+
+  useEffect(() => {
+    if (applyPhase !== 'countdown' || applyDeadline === null) return
+
+    const updateCountdown = () => {
+      setApplyCountdown(Math.max(0, Math.ceil((applyDeadline - Date.now()) / 1000)))
+    }
+
+    updateCountdown()
+    const timer = window.setInterval(updateCountdown, 250)
+    return () => window.clearInterval(timer)
+  }, [applyDeadline, applyPhase])
+
+  useEffect(() => {
+    if (applyPhase !== 'countdown' || applyCountdown > 0 || hasRedirectedRef.current) return
+
+    hasRedirectedRef.current = true
+    sessionStorage.removeItem('isLoggedIn')
+    sessionStorage.removeItem('token')
+    sessionStorage.removeItem('username')
+    sessionStorage.removeItem('wifiApplyPending')
+    sessionStorage.removeItem('wifiApplyDeadline')
+    sessionStorage.removeItem('wifiApplyDuration')
+    updateCurrentAllModule([])
+    clearPageDataCache()
+    navigate('/login', { replace: true })
+  }, [applyCountdown, applyPhase, navigate, updateCurrentAllModule])
 
   const updateModuleRadio = (index: number, patch: RadioPatch) => {
     setConfig((prev) => {
@@ -330,143 +465,41 @@ export default function WiFiConfiguration(): JSX.Element {
     })
   }
 
-  const radioKey = (mod: WifiModuleRadio, band: RadioBand) =>
-    `${mod.type || 'module'}-${mod.ip || 'local'}-${band}`
-
-  const isRadioRunning = (mod: WifiModuleRadio, band: RadioBand) =>
-    band === '2g' ? Boolean(mod.radio_running_2g) : Boolean(mod.radio_running_5g)
-
-  const updateModuleRadioState = (
-    mod: WifiModuleRadio,
-    band: RadioBand,
-    enabled: boolean,
-    runtime?: WifiRadioToggleResponse['runtime']
-  ) => {
-    setConfig((prev) => ({
-      ...prev,
-      modules: (prev.modules || []).map((m) => {
-        const sameModule =
-          (m.type === 'main' && mod.type === 'main') ||
-          (m.ip && mod.ip && m.ip === mod.ip)
-
-        if (!sameModule) {
-          return m
-        }
-
-        return {
-          ...m,
-          ...(band === '2g'
-            ? {
-                radio_enabled_2g: enabled,
-                radio_running_2g: runtime ? runtime.radio_2g_running : enabled
-              }
-            : {
-                radio_enabled_5g: enabled,
-                radio_running_5g: runtime ? runtime.radio_5g_running : enabled
-              })
-        }
-      })
-    }))
-  }
-
-  const toggleRadioState = async (mod: WifiModuleRadio, band: RadioBand) => {
-    const key = radioKey(mod, band)
-    // Button action follows the current runtime state:
-    // running -> Disable, stopped -> Enable. The chosen action is then saved
-    // into the central state file so the enforcer keeps applying it.
-    const nextEnabled = !isRadioRunning(mod, band)
-
-    setTogglingRadioKey(key)
-    setError(null)
-    setSuccess(null)
-    setSyncResults([])
-
-    try {
-      const res = await apiFetch('/api/mtk/wifi', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          action: 'radio_state',
-          name: mod.name,
-          type: mod.type,
-          ip: mod.ip,
-          band,
-          enabled: nextEnabled
-        })
-      })
-
-      const text = await res.text()
-
-      if (!res.ok) {
-        throw new Error(text || `HTTP ${res.status}`)
-      }
-
-      let payloadResp: WifiRadioToggleResponse = { status: 'ok' }
-
-      try {
-        payloadResp = JSON.parse(text) as WifiRadioToggleResponse
-      } catch {
-        payloadResp = { status: 'ok' }
-      }
-
-      const result = payloadResp.result
-      if (result) {
-        setSyncResults([result])
-      }
-
-      updateModuleRadioState(mod, band, nextEnabled, payloadResp.runtime)
-
-      if (result && !result.ok) {
-        setSuccess(`${mod.name}: ${band === '2g' ? '2.4GHz' : '5GHz'} state saved, but apply returned warning.`)
-      } else {
-        setSuccess(
-          `${mod.name}: ${band === '2g' ? '2.4GHz' : '5GHz'} ${
-            nextEnabled ? 'enabled' : 'disabled'
-          }. Central state will be enforced every 5 seconds.`
-        )
-      }
-
-      await fetchWifi({ silent: true, preserveMessages: true })
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      setError(`Radio state update failed: ${msg}`)
-    } finally {
-      setTogglingRadioKey(null)
-    }
-  }
-
-  const renderRadioStateButton = (mod: WifiModuleRadio, band: RadioBand) => {
-    const key = radioKey(mod, band)
-    const running = isRadioRunning(mod, band)
-    const busy = togglingRadioKey === key
+  const renderRadioStateButton = (mod: WifiModuleRadio, index: number, band: RadioBand) => {
+    const enabled = band === '2g' ? mod.radio_enabled_2g : mod.radio_enabled_5g
     const label = band === '2g' ? '2.4GHz' : '5GHz'
-    const actionLabel = running ? 'Disable' : 'Enable'
+    const actionLabel = enabled ? 'Disable' : 'Enable'
 
     return (
       <div className="w-full">
         <Button
           type="button"
-          disabled={saving || busy || !mod.online}
+          disabled={saving || !mod.online || !mod.identity_ready}
           onClick={() => {
-            void toggleRadioState(mod, band)
+            updateModuleRadio(
+              index,
+              band === '2g'
+                ? { radio_enabled_2g: !enabled }
+                : { radio_enabled_5g: !enabled }
+            )
+            setError(null)
+            setSuccess(null)
+            setSyncResults([])
           }}
-          className={
-            running
-              ? 'h-8 w-full justify-center bg-destructive px-2 text-xs text-white hover:bg-destructive/90'
-              : 'h-8 w-full justify-center bg-success px-2 text-xs text-white hover:bg-success/90'
-          }
-          title={running ? `Disable ${label}` : `Enable ${label}`}
+          className="h-8 w-full justify-center px-2 text-xs"
+          variant={enabled ? 'destructive' : 'success'}
+          title={`${actionLabel} ${label} when settings are saved`}
         >
           <Power className="mr-1 h-3.5 w-3.5" />
-          {busy ? 'Updating...' : actionLabel}
+          {actionLabel}
         </Button>
       </div>
     )
   }
 
   const handleSave = async () => {
+    if (!hasChanges) return
+
     const validationError = validateWifiConfig(config)
     if (validationError) {
       setError(validationError)
@@ -476,43 +509,21 @@ export default function WiFiConfiguration(): JSX.Element {
     const ok = await confirmDialog({
       title: 'Apply WiFi settings?',
       description:
-        'This will apply the 2.4GHz/5GHz SSID/password and per-radio settings. WiFi interfaces will restart. Continue?',
+        'This will apply the 2.4GHz/5GHz SSID/password and per-radio settings. WiFi connections will briefly reset. Continue?',
       confirmText: 'Apply'
     })
 
     if (!ok) return
 
     setSaving(true)
+    setApplyPhase('submitting')
     setError(null)
     setSuccess(null)
     setSyncResults([])
+    sessionStorage.setItem('wifiApplyPending', 'true')
 
     try {
-      const payload: WifiConfig = {
-        ssid_2g: config.ssid_2g.trim(),
-        pass_2g: config.pass_2g,
-        ssid_5g: config.ssid_5g.trim(),
-        pass_5g: config.pass_5g,
-        modules: (config.modules || []).map((m) => ({
-          name: m.name,
-          type: m.type,
-          ip: m.ip,
-          online: m.online,
-
-          channel_2g: String(m.channel_2g),
-          channel_width_2g: m.channel_width_2g,
-          tx_power_2g: Number(m.tx_power_2g),
-
-          channel_5g: String(m.channel_5g),
-          channel_width_5g: m.channel_width_5g,
-          tx_power_5g: Number(m.tx_power_5g),
-
-          radio_enabled_2g: m.radio_enabled_2g,
-          radio_enabled_5g: m.radio_enabled_5g,
-          radio_running_2g: m.radio_running_2g,
-          radio_running_5g: m.radio_running_5g
-        }))
-      }
+      const payload = buildWifiPayload(config)
 
       const res = await apiFetch('/api/mtk/wifi', {
         method: 'POST',
@@ -537,24 +548,53 @@ export default function WiFiConfiguration(): JSX.Element {
       }
 
       const results = payloadResp.results || []
-      setSyncResults(results)
-
       const failed = results.filter((r) => !r.ok)
-
       if (failed.length > 0) {
-        setSuccess(`WiFi settings applied with ${failed.length} warning(s).`)
-      } else {
-        setSuccess('WiFi settings applied successfully.')
+        throw new Error(`${failed.length} device configuration(s) could not be verified`)
       }
 
-      await fetchWifi({ silent: true, preserveMessages: true })
+      const estimatedSeconds =
+        typeof payloadResp.estimated_seconds === 'number' &&
+        Number.isFinite(payloadResp.estimated_seconds) &&
+        payloadResp.estimated_seconds >= 10 &&
+        payloadResp.estimated_seconds <= 60
+          ? Math.ceil(payloadResp.estimated_seconds)
+          : DEFAULT_WIFI_APPLY_SECONDS
+      const nextDeadline = Date.now() + estimatedSeconds * 1000
+      const expectedModuleCount = Math.max(1, currentAllModule.length)
+
+      setSyncResults(results)
+      setSavedConfig(payload)
+      setPageDataCache(WIFI_CONFIG_CACHE_KEY, payload)
+      setApplyTotal(estimatedSeconds)
+      setApplyCountdown(estimatedSeconds)
+      setApplyDeadline(nextDeadline)
+      sessionStorage.setItem('wifiApplyDeadline', String(nextDeadline))
+      sessionStorage.setItem('wifiApplyDuration', String(estimatedSeconds))
+      sessionStorage.setItem('wifiExpectedModuleCount', String(expectedModuleCount))
+      sessionStorage.setItem(
+        'wifiModuleRecoveryDeadline',
+        String(nextDeadline + 2 * 60 * 1000)
+      )
+      setApplyPhase('countdown')
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
-      setError(`Save failed: ${msg}`)
-    } finally {
+      sessionStorage.removeItem('wifiApplyPending')
+      sessionStorage.removeItem('wifiApplyDeadline')
+      sessionStorage.removeItem('wifiApplyDuration')
+      setApplyPhase('idle')
+      setApplyDeadline(null)
       setSaving(false)
+      setError(`Save failed: ${msg}`)
     }
   }
+
+  const applyProgress =
+    applyPhase === 'countdown'
+      ? Math.min(100, Math.max(0, ((applyTotal - applyCountdown) / applyTotal) * 100))
+      : 0
+  const progressRadius = 40
+  const progressCircumference = 2 * Math.PI * progressRadius
 
   if (loading) {
     return (
@@ -584,11 +624,67 @@ export default function WiFiConfiguration(): JSX.Element {
   }
 
   return (
-    <div className="w-full overflow-x-hidden px-2 py-4 sm:px-4 lg:px-5">
-      <div className="mx-auto w-full max-w-none">
-        <div className="mb-4">
-          <h2 className="text-2xl font-bold text-foreground">WiFi Configuration</h2>
-        </div>
+    <PageShell size="full" className="overflow-x-hidden">
+      {applyPhase !== 'idle' && (
+        <FullScreenTaskOverlay panelClassName="flex flex-col items-center">
+          <div className="relative mb-6 flex items-center justify-center">
+            <svg className="h-32 w-32 -rotate-90 transform">
+              <circle
+                cx="64"
+                cy="64"
+                r={progressRadius}
+                stroke="currentColor"
+                strokeWidth="8"
+                fill="transparent"
+                className="text-muted-foreground/40"
+              />
+              <circle
+                cx="64"
+                cy="64"
+                r={progressRadius}
+                stroke="currentColor"
+                strokeWidth="8"
+                fill="transparent"
+                strokeDasharray={progressCircumference}
+                strokeDashoffset={
+                  progressCircumference - (applyProgress / 100) * progressCircumference
+                }
+                className="text-primary transition-all duration-1000 ease-linear"
+              />
+            </svg>
+
+            <div className="absolute text-3xl font-bold text-foreground">
+              {applyPhase === 'countdown' ? (
+                applyCountdown
+              ) : (
+                <Wifi className="h-9 w-9 animate-pulse text-primary" />
+              )}
+            </div>
+          </div>
+
+          <h3 className="mb-2 font-display text-2xl font-bold text-foreground">
+            Applying WiFi Settings
+          </h3>
+
+          <div className="mb-6 rounded-lg border border-warning/30 bg-warning/10 p-4 text-left">
+            <div className="flex items-start gap-2 text-sm text-warning">
+              <AlertTriangle className="h-5 w-5 shrink-0" />
+              <p>
+                WiFi will disconnect while the new settings are applied. Reconnect to the
+                configured WiFi network when the countdown finishes.
+              </p>
+            </div>
+          </div>
+
+          <p className="text-muted-foreground">
+            {applyPhase === 'submitting'
+              ? 'Saving and verifying configuration…'
+              : `Returning to login in ${applyCountdown}s…`}
+          </p>
+        </FullScreenTaskOverlay>
+      )}
+
+      <PageHeader title="WiFi Configuration" description="Manage the shared SSIDs and per-device radio settings for the router and antennas." />
 
         <div className="grid gap-3">
           <Card>
@@ -636,15 +732,17 @@ export default function WiFiConfiguration(): JSX.Element {
                             }))
                           }
                         />
-                        <button
+                        <Button
                           type="button"
+                          variant="ghost"
+                          size="icon"
                           onClick={() => setShow2g((v) => !v)}
-                          className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground hover:text-foreground"
+                          className="absolute inset-y-0 right-0 text-muted-foreground hover:text-foreground"
                           aria-label={show2g ? 'Hide password' : 'Show password'}
                           tabIndex={-1}
                         >
                           {show2g ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                        </button>
+                        </Button>
                       </div>
                     </div>
                   </div>
@@ -683,15 +781,17 @@ export default function WiFiConfiguration(): JSX.Element {
                             }))
                           }
                         />
-                        <button
+                        <Button
                           type="button"
+                          variant="ghost"
+                          size="icon"
                           onClick={() => setShow5g((v) => !v)}
                           className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground hover:text-foreground"
                           aria-label={show5g ? 'Hide password' : 'Show password'}
                           tabIndex={-1}
                         >
                           {show5g ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                        </button>
+                        </Button>
                       </div>
                     </div>
                   </div>
@@ -717,7 +817,7 @@ export default function WiFiConfiguration(): JSX.Element {
                 </div>
               ) : (
                 <div className="w-full overflow-x-auto">
-                  <table className="w-full min-w-[1180px] table-fixed text-xs">
+                  <Table className="w-full min-w-[1180px] table-fixed text-xs">
                     <colgroup>
                       <col style={{ width: '19%' }} />
                       <col style={{ width: '15.5%' }} />
@@ -755,7 +855,7 @@ export default function WiFiConfiguration(): JSX.Element {
 
                     <tbody>
                       {(config.modules || []).map((mod, idx) => (
-                        <tr key={`${mod.type}-${mod.ip || idx}`} className="border-b">
+                        <tr key={mod.module_id || `${mod.type}-${mod.ip || idx}`} className="border-b">
                           <td className="px-1.5 py-2">
                             <div className="flex items-center gap-1.5">
                               <Settings2 className="h-4 w-4 text-muted-foreground" />
@@ -763,12 +863,17 @@ export default function WiFiConfiguration(): JSX.Element {
                                 <div className="font-medium text-foreground">
                                   {mod.name || (mod.type === 'main' ? 'Router' : 'Antenna')}
                                 </div>
+                                {!mod.identity_ready && mod.type !== 'main' && (
+                                  <div className="text-[10px] text-warning">
+                                    Identifying physical port…
+                                  </div>
+                                )}
                               </div>
                             </div>
                           </td>
 
                           <td className="border-l px-1.5 py-2">
-                            <select
+                            <NativeSelect
                               value={String(mod.channel_2g)}
                               disabled={saving}
                               onChange={(e) => updateModuleRadio(idx, { channel_2g: e.target.value })}
@@ -779,11 +884,11 @@ export default function WiFiConfiguration(): JSX.Element {
                                   {opt.label}
                                 </option>
                               ))}
-                            </select>
+                            </NativeSelect>
                           </td>
 
                           <td className="px-1.5 py-2">
-                            <select
+                            <NativeSelect
                               value={mod.channel_width_2g}
                               disabled={saving}
                               onChange={(e) => updateModuleRadio(idx, { channel_width_2g: e.target.value })}
@@ -794,7 +899,7 @@ export default function WiFiConfiguration(): JSX.Element {
                                   {opt.label}
                                 </option>
                               ))}
-                            </select>
+                            </NativeSelect>
                           </td>
 
                           <td className="px-1.5 py-2">
@@ -816,10 +921,10 @@ export default function WiFiConfiguration(): JSX.Element {
                             </div>
                           </td>
 
-                          <td className="px-1.5 py-2 align-middle">{renderRadioStateButton(mod, '2g')}</td>
+                          <td className="px-1.5 py-2 align-middle">{renderRadioStateButton(mod, idx, '2g')}</td>
 
                           <td className="border-l px-1.5 py-2">
-                            <select
+                            <NativeSelect
                               value={String(mod.channel_5g)}
                               disabled={saving}
                               onChange={(e) => updateModuleRadio(idx, { channel_5g: e.target.value })}
@@ -830,11 +935,11 @@ export default function WiFiConfiguration(): JSX.Element {
                                   {opt.label}
                                 </option>
                               ))}
-                            </select>
+                            </NativeSelect>
                           </td>
 
                           <td className="px-1.5 py-2">
-                            <select
+                            <NativeSelect
                               value={mod.channel_width_5g}
                               disabled={saving}
                               onChange={(e) => updateModuleRadio(idx, { channel_width_5g: e.target.value })}
@@ -845,7 +950,7 @@ export default function WiFiConfiguration(): JSX.Element {
                                   {opt.label}
                                 </option>
                               ))}
-                            </select>
+                            </NativeSelect>
                           </td>
 
                           <td className="px-1.5 py-2">
@@ -867,11 +972,11 @@ export default function WiFiConfiguration(): JSX.Element {
                             </div>
                           </td>
 
-                          <td className="px-1.5 py-2 align-middle">{renderRadioStateButton(mod, '5g')}</td>
+                          <td className="px-1.5 py-2 align-middle">{renderRadioStateButton(mod, idx, '5g')}</td>
                         </tr>
                       ))}
                     </tbody>
-                  </table>
+                  </Table>
                 </div>
               )}
 
@@ -906,12 +1011,15 @@ export default function WiFiConfiguration(): JSX.Element {
                 </div>
               )}
 
-              <div className="mt-4 flex justify-end border-t pt-3">
+              <div className="mt-4 flex items-center justify-between gap-3 border-t pt-3">
+                <span className="text-xs text-muted-foreground">
+                  {hasChanges ? 'Unsaved changes' : 'All changes saved'}
+                </span>
                 <Button
                   onClick={() => {
                     void handleSave()
                   }}
-                  disabled={saving}
+                  disabled={saving || !hasChanges}
                 >
                   {saving ? (
                     'Applying...'
@@ -926,7 +1034,6 @@ export default function WiFiConfiguration(): JSX.Element {
             </CardContent>
           </Card>
         </div>
-      </div>
-    </div>
+    </PageShell>
   )
 }

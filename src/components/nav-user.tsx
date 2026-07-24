@@ -18,6 +18,17 @@ import {
   useSidebar
 } from '@/components/ui/sidebar'
 import useDevModeStore from '@/states/devModeState'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { clearPageDataCache } from '@/utils/page-data-cache'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog'
 
 // 开发者模式密码只存在前端(软隐藏,非安全边界)。见 devModeState.ts 说明。
 const DEV_MODE_PASSWORD = 'west20st'
@@ -49,6 +60,7 @@ export function NavUser({
 
     localStorage.removeItem('isLoggedIn')
     localStorage.removeItem('token')
+    clearPageDataCache()
 
     navigate('/login', { replace: true })
   }
@@ -75,6 +87,7 @@ export function NavUser({
   }
 
   return (
+    <>
     <SidebarMenu>
       <SidebarMenuItem>
         <DropdownMenu>
@@ -130,53 +143,45 @@ export function NavUser({
         </DropdownMenu>
       </SidebarMenuItem>
 
-      {showDevDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-          <div className="w-[90vw] max-w-sm overflow-hidden rounded-lg bg-card shadow-xl">
-            <div className="border-b bg-muted px-6 py-4">
-              <h3 className="text-lg font-semibold text-foreground">Developer Mode</h3>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Enter the developer password to enable advanced details.
-              </p>
-            </div>
-
-            <div className="space-y-2 p-6">
-              <input
-                type="password"
-                autoFocus
-                value={password}
-                onChange={(e) => {
-                  setPassword(e.target.value)
-                  if (pwError) setPwError(false)
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') submitDevPassword()
-                }}
-                placeholder="Password"
-                className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
-              />
-              {pwError && (
-                <p className="text-xs text-destructive">Incorrect password.</p>
-              )}
-            </div>
-
-            <div className="flex justify-end gap-3 border-t bg-muted px-6 py-4">
-              <button
-                onClick={closeDevDialog}
-                className="rounded border px-4 py-2 text-sm text-foreground hover:bg-muted"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={submitDevPassword}
-                className="rounded bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90"
-              >
-                Enable
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </SidebarMenu>
+    <Dialog
+      open={showDevDialog}
+      onOpenChange={(open) => {
+        if (!open) closeDevDialog()
+      }}
+    >
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Developer Mode</DialogTitle>
+          <DialogDescription>
+            Enter the developer password to enable advanced details.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-2">
+          <Input
+            type="password"
+            autoFocus
+            value={password}
+            onChange={(e) => {
+              setPassword(e.target.value)
+              if (pwError) setPwError(false)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') submitDevPassword()
+            }}
+            placeholder="Password"
+            aria-invalid={pwError}
+          />
+          {pwError && <p className="text-xs text-destructive">Incorrect password.</p>}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={closeDevDialog}>Cancel</Button>
+          <Button onClick={submitDevPassword}>Enable</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    </>
   )
 }

@@ -80,7 +80,7 @@ func handleSetStatic(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"bad json"}`, http.StatusBadRequest)
 		return
 	}
-	in.MAC = strings.ToUpper(strings.TrimSpace(in.MAC))
+	in.MAC = staticLeaseNormalizeMAC(in.MAC)
 	in.IPAddr = strings.TrimSpace(in.IPAddr)
 	in.Hostname = strings.TrimSpace(in.Hostname)
 	if in.MAC == "" || in.IPAddr == "" {
@@ -90,7 +90,7 @@ func handleSetStatic(w http.ResponseWriter, r *http.Request) {
 
 	section, updated, err := staticLeaseUpsert(bearerSID(r), in.MAC, in.IPAddr, in.Hostname)
 	if err != nil {
-		http.Error(w, `{"error":"save failed: `+escapeErr(err)+`"}`, http.StatusInternalServerError)
+		http.Error(w, `{"error":"save failed: `+escapeErr(err)+`"}`, staticLeaseErrorStatus(err))
 		return
 	}
 
@@ -107,7 +107,7 @@ func handleUnsetStatic(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"bad json"}`, http.StatusBadRequest)
 		return
 	}
-	in.MAC = strings.ToUpper(strings.TrimSpace(in.MAC))
+	in.MAC = staticLeaseNormalizeMAC(in.MAC)
 	if in.MAC == "" {
 		http.Error(w, `{"error":"mac is required"}`, http.StatusBadRequest)
 		return

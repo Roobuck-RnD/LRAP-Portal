@@ -1,16 +1,5 @@
-import type { JSX } from 'react'
-import useCurrentTabStore from '@/states/tabState'
+import { PlaceholderPage } from '@/components/page'
 
-function Software(): JSX.Element {
-  const { currentTab } = useCurrentTabStore()
-  return (
-    <div className="flex items-center justify-center h-full">
-      <div className="text-center">
-        <div className="text-lg font-semibold">Current tab:</div>
-        <div className="text-xl">{currentTab}</div>
-      </div>
-    </div>
-  )
+export default function Software() {
+  return <PlaceholderPage title="Software" />
 }
-
-export default Software

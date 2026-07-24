@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { PageHeader, PageShell } from '@/components/page'
 
 export default function Administration(): JSX.Element {
   const navigate = useNavigate()
@@ -81,11 +82,8 @@ export default function Administration(): JSX.Element {
   }
 
   return (
-    <div className="p-6 max-w-lg mx-auto">
-      <div className="mb-6">
-        <h2 className="text-2xl font-bold text-foreground">Change Password</h2>
-        <p className="text-sm text-muted-foreground">Update your system access password.</p>
-      </div>
+    <PageShell size="narrow">
+      <PageHeader title="Change Password" description="Update your system access password." />
 
       <Card>
         <CardHeader>
@@ -147,6 +145,6 @@ export default function Administration(): JSX.Element {
           </form>
         </CardContent>
       </Card>
-    </div>
+    </PageShell>
   )
 }

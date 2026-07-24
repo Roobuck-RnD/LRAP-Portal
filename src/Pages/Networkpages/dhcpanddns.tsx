@@ -3,7 +3,7 @@ import type { JSX } from 'react'
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useCurrentAllModuleStore } from '@/states/allModuleState'
 import { apiFetch } from '@/utils/http'
-import { Trash2, Plus, RefreshCw, Save, Server, Search } from 'lucide-react'
+import { Trash2, Plus, RefreshCw, Save, Server } from 'lucide-react'
 
 // Shadcn UI Components
 import {
@@ -22,6 +22,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
+import { SearchField } from '@/components/data-table'
+import { PageHeader, PageShell, StatCard } from '@/components/page'
+import { FullScreenTaskOverlay } from '@/components/task-overlay'
+import { getPageDataCache, setPageDataCache } from '@/utils/page-data-cache'
 
 // Sonner Toast
 import { toast } from 'sonner'
@@ -55,6 +59,11 @@ const INITIAL_FORM: NewLeaseForm = {
   ipaddr: ''
 }
 
+const STATIC_LEASE_PREFIX = '10.10.18'
+const STATIC_LEASE_MIN_HOST = 6
+const STATIC_LEASE_MAX_HOST = 99
+const STATIC_LEASES_CACHE_KEY = 'network.static-leases'
+
 // ---------- Helpers ----------
 
 const getErrorMessage = (error: unknown): string => {
@@ -65,11 +74,49 @@ const getErrorMessage = (error: unknown): string => {
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function normalizeMac(mac: string): string {
-  return mac.trim().toUpperCase()
+  return mac.trim().replace(/-/g, ':').toUpperCase()
+}
+
+function getStaticLeaseIPError(
+  ip: string,
+  mac: string,
+  existing: StaticLease[]
+): string | null {
+  const parts = ip.trim().split('.')
+  if (
+    parts.length !== 4 ||
+    parts.some((part) => !/^\d+$/.test(part) || Number(part) < 0 || Number(part) > 255)
+  ) {
+    return 'Please enter a valid IPv4 address.'
+  }
+
+  const prefix = parts.slice(0, 3).join('.')
+  const host = Number(parts[3])
+  if (
+    prefix !== STATIC_LEASE_PREFIX ||
+    host < STATIC_LEASE_MIN_HOST ||
+    host > STATIC_LEASE_MAX_HOST
+  ) {
+    return `Static IPv4 addresses must be between ${STATIC_LEASE_PREFIX}.${STATIC_LEASE_MIN_HOST} and ${STATIC_LEASE_PREFIX}.${STATIC_LEASE_MAX_HOST}.`
+  }
+
+  const normalizedMAC = normalizeMac(mac)
+  const duplicate = existing.find(
+    (lease) =>
+      lease.ipaddr.trim() === ip.trim() && normalizeMac(lease.mac) !== normalizedMAC
+  )
+  if (duplicate) {
+    return 'This IPv4 address is already assigned to another device.'
+  }
+
+  return null
 }
 
 export default function DHCPandDNS(): JSX.Element {
   const { currentAllModule } = useCurrentAllModuleStore()
+  const [cachedAtMount] = useState<ModuleView | undefined>(() =>
+    getPageDataCache<ModuleView>(STATIC_LEASES_CACHE_KEY)
+  )
 
   const mainModule = useMemo(() => {
     return (
@@ -79,12 +126,15 @@ export default function DHCPandDNS(): JSX.Element {
     )
   }, [currentAllModule])
 
-  const [view, setView] = useState<ModuleView>({
-    name: 'Router',
-    ip: undefined,
-    leases: [],
-    loading: false
-  })
+  const [view, setView] = useState<ModuleView>(
+    () =>
+      cachedAtMount ?? {
+        name: 'Router',
+        ip: undefined,
+        leases: [],
+        loading: false
+      }
+  )
 
   const [form, setForm] = useState<NewLeaseForm>(INITIAL_FORM)
   const [search, setSearch] = useState('')
@@ -131,7 +181,14 @@ export default function DHCPandDNS(): JSX.Element {
 
     if (!res.ok) {
       const txt = await res.text().catch(() => '')
-      throw new Error(txt || 'Add failed')
+      let message = txt || 'Add failed'
+      try {
+        const parsed = JSON.parse(txt) as { error?: string }
+        if (parsed.error) message = parsed.error
+      } catch {
+        // Keep the plain response if it is not JSON.
+      }
+      throw new Error(message)
     }
   }, [])
 
@@ -151,7 +208,7 @@ export default function DHCPandDNS(): JSX.Element {
 
   // ---------- Data Loading ----------
 
-  const loadAll = useCallback(async () => {
+  const loadAll = useCallback(async (isBackground = false) => {
     setView((prev) => ({
       ...prev,
       name: mainModule?.name || 'Router',
@@ -163,27 +220,29 @@ export default function DHCPandDNS(): JSX.Element {
     try {
       const leases = await fetchLeases()
 
-      setView({
+      const nextView: ModuleView = {
         name: mainModule?.name || 'Router',
         ip: mainModule?.ipaddress,
         leases,
         loading: false,
         error: undefined
-      })
+      }
+      setPageDataCache(STATIC_LEASES_CACHE_KEY, nextView)
+      setView(nextView)
     } catch (error: unknown) {
-      setView({
-        name: mainModule?.name || 'Router',
-        ip: mainModule?.ipaddress,
-        leases: [],
+      setView((prev) => ({
+        name: mainModule?.name || prev.name || 'Router',
+        ip: mainModule?.ipaddress || prev.ip,
+        leases: isBackground ? prev.leases : [],
         loading: false,
         error: getErrorMessage(error)
-      })
+      }))
     }
   }, [fetchLeases, mainModule?.ipaddress, mainModule?.name])
 
   useEffect(() => {
-    void loadAll()
-  }, [loadAll])
+    void loadAll(cachedAtMount !== undefined)
+  }, [cachedAtMount, loadAll])
 
   // ---------- Derived Data ----------
 
@@ -223,6 +282,12 @@ export default function DHCPandDNS(): JSX.Element {
       return
     }
 
+    const ipError = getStaticLeaseIPError(form.ipaddr, form.mac, view.leases)
+    if (ipError) {
+      toast.error('Invalid Static Address', { description: ipError })
+      return
+    }
+
     setActionConfirm({ isOpen: true, type: 'add' })
   }
 
@@ -250,13 +315,16 @@ export default function DHCPandDNS(): JSX.Element {
       await delay(1200)
 
       const newLeases = await fetchLeases()
-
-      setView((prev) => ({
-        ...prev,
+      const nextView: ModuleView = {
+        name: mainModule?.name || view.name || 'Router',
+        ip: mainModule?.ipaddress || view.ip,
         leases: newLeases || [],
         loading: false,
         error: undefined
-      }))
+      }
+
+      setPageDataCache(STATIC_LEASES_CACHE_KEY, nextView)
+      setView(nextView)
 
       toast.success('Success', {
         description: `Static lease successfully ${type === 'add' ? 'added' : 'deleted'}.`
@@ -278,49 +346,21 @@ export default function DHCPandDNS(): JSX.Element {
   const filteredCount = filteredLeases.length
 
   return (
-    <div className="p-6 max-w-[1600px] mx-auto relative">
-      <div className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-3xl font-bold tracking-tight text-foreground">Static DHCP Leases</h2>
-          <p className="text-sm text-muted-foreground mt-1">
-            Manage fixed IPv4 assignments on the DHCP server.
-          </p>
-        </div>
-      </div>
+    <PageShell size="full" className="relative">
+      <PageHeader title="Static DHCP Leases" description="Manage fixed IPv4 assignments on the DHCP server." />
 
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Total Static Leases</CardDescription>
-            <CardTitle className="text-3xl">{totalLeases}</CardTitle>
-          </CardHeader>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Filtered Results</CardDescription>
-            <CardTitle className="text-3xl">{filteredCount}</CardTitle>
-          </CardHeader>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>DHCP Server</CardDescription>
-            <CardTitle className="text-lg">{view.name || 'Router'}</CardTitle>
-            <CardDescription className="font-mono">{view.ip || ''}</CardDescription>
-          </CardHeader>
-        </Card>
+        <StatCard label="Total Static Leases" value={totalLeases} />
+        <StatCard label="Filtered Results" value={filteredCount} />
+        <StatCard label="DHCP Server" value={view.name || 'Router'} detail={view.ip || ''} />
       </div>
 
-      <div className="mb-6 flex items-center gap-2 rounded-xl border bg-card px-3 py-2 shadow-sm">
-        <Search className="h-4 w-4 text-muted-foreground" />
-        <Input
+      <SearchField
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search hostname, MAC address, IPv4 address, or section..."
-          className="border-0 shadow-none focus-visible:ring-0"
-        />
-      </div>
+          className="sm:w-full"
+      />
 
       <Card className="flex flex-col overflow-hidden shadow-sm">
         <CardHeader className="border-b border-border pb-4">
@@ -396,11 +436,12 @@ export default function DHCPandDNS(): JSX.Element {
 
                           <TableCell className="text-right">
                             <Button
-                              variant="outline"
-                              size="sm"
+                              variant="destructiveOutline"
+                              size="icon"
                               onClick={() => triggerDelete(lease.section)}
                               disabled={view.loading}
-                              className="border-destructive/30 text-destructive hover:bg-destructive/10"
+                              title="Delete static DHCP lease"
+                              aria-label="Delete static DHCP lease"
                             >
                               <Trash2 className="h-4 w-4" />
                             </Button>
@@ -451,10 +492,15 @@ export default function DHCPandDNS(): JSX.Element {
                     </Label>
                     <Input
                       id="ip-ac"
+                      placeholder={`${STATIC_LEASE_PREFIX}.${STATIC_LEASE_MIN_HOST}`}
                       className="h-8 text-xs font-mono"
                       value={form.ipaddr}
                       onChange={(e) => handleFormChange('ipaddr', e.target.value)}
                     />
+                    <div className="text-xs text-muted-foreground">
+                      Allowed range: {STATIC_LEASE_PREFIX}.{STATIC_LEASE_MIN_HOST}–
+                      {STATIC_LEASE_PREFIX}.{STATIC_LEASE_MAX_HOST}
+                    </div>
                   </div>
                 </div>
 
@@ -496,14 +542,10 @@ export default function DHCPandDNS(): JSX.Element {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
+              variant={actionConfirm.type === 'delete' ? 'destructive' : 'default'}
               onClick={() => {
                 void executeAction()
               }}
-              className={
-                actionConfirm.type === 'delete'
-                  ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
-                  : ''
-              }
             >
               Continue
             </AlertDialogAction>
@@ -512,18 +554,14 @@ export default function DHCPandDNS(): JSX.Element {
       </AlertDialog>
 
       {isProcessing && (
-        <div className="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-background/80 backdrop-blur-sm transition-opacity">
-          <Card className="w-[300px] shadow-2xl animate-in zoom-in-95">
-            <CardContent className="pt-6 pb-6 flex flex-col items-center">
+        <FullScreenTaskOverlay>
               <RefreshCw className="mb-4 h-10 w-10 animate-spin text-primary" />
               <h3 className="text-lg font-semibold text-foreground">Applying Configuration</h3>
               <p className="mt-2 text-center text-sm text-muted-foreground">
                 Reloading DHCP service...
               </p>
-            </CardContent>
-          </Card>
-        </div>
+        </FullScreenTaskOverlay>
       )}
-    </div>
+    </PageShell>
   )
 }

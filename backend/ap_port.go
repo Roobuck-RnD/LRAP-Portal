@@ -12,16 +12,7 @@ import (
 
 // apPortIndexByIP 返回 "AP 的 IP -> 物理口号(1-4)"。解析不出的 IP 不在 map 里。
 func apPortIndexByIP() map[string]int {
-	arpByIP := parseARPByIP()           // ip -> MAC(大写)
-	portByMAC := listLanEdgePortsByMAC() // MAC(大写) -> port("lan1"...)
-
-	out := make(map[string]int)
-	for ip, mac := range arpByIP {
-		if n := lanPortNumber(portByMAC[mac]); n > 0 {
-			out[ip] = n
-		}
-	}
-	return out
+	return managedAPPortIndexByIP(discoverManagedAPs(false))
 }
 
 // lanPortNumber 从 "lanN" 解析出 N(如 "lan3" -> 3);不是 lan 口返回 0。

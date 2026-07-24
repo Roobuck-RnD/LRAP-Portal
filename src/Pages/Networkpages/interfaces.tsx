@@ -8,10 +8,28 @@ import { apiFetch } from '@/utils/http'
 import { confirmDialog } from '@/components/ui/confirm'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { NativeSelect } from '@/components/ui/native-select'
+import { Switch } from '@/components/ui/switch'
+import { Table } from '@/components/ui/table'
+import { Textarea } from '@/components/ui/textarea'
+import { PageHeader, PageShell } from '@/components/page'
+import { FullScreenTaskOverlay } from '@/components/task-overlay'
+import { getPageDataCache, setPageDataCache } from '@/utils/page-data-cache'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog'
 import {
   AlertCircle,
   Network,
   Plus,
+  RefreshCw,
   ServerCog,
   Square,
   Trash2,
@@ -58,6 +76,7 @@ interface InterfaceStats {
 
 interface APManagementInfo {
   name: string
+  antenna_index?: number
   ip: string
   online: boolean
   ipaddr: string
@@ -101,7 +120,24 @@ type SaveInterfacePayload = {
   }
 }
 
+interface InterfaceActionResponse {
+  ok: boolean
+  changed?: boolean
+  lan_restarting?: boolean
+  estimated_seconds?: number
+}
+
 // ---------- Helpers ----------
+
+const FIXED_LAN_IP = '10.10.18.1'
+const INTERFACES_CACHE_KEY = 'network.interfaces'
+const REQUIRED_LAN_ADDRESSES = [
+  FIXED_LAN_IP,
+  '10.10.18.2',
+  '10.10.18.3',
+  '10.10.18.4',
+  '10.10.18.5'
+]
 
 function formatUptime(seconds: number): string {
   if (!seconds) return '0s'
@@ -158,14 +194,86 @@ function isValidNetmask(value: string): boolean {
   return /^1*0*$/.test(binary) && binary.includes('1') && binary.includes('0')
 }
 
-function isValidInterfaceName(value: string): boolean {
-  return /^[A-Za-z0-9_]+$/.test(value.trim())
+function ipv4ToUint32(value: string): number | null {
+  if (!isValidIPv4(value)) return null
+
+  return value
+    .trim()
+    .split('.')
+    .reduce((result, part) => ((result << 8) | Number(part)) >>> 0, 0)
 }
 
-function isPositiveNumber(value: string): boolean {
-  const v = value.trim()
-  if (!/^\d+$/.test(v)) return false
-  return Number(v) >= 0
+function isLANNetmaskCompatible(mask: string): boolean {
+  if (!isValidNetmask(mask)) return false
+
+  const maskValue = ipv4ToUint32(mask)
+  const lanValue = ipv4ToUint32(FIXED_LAN_IP)
+  if (maskValue === null || lanValue === null) return false
+
+  const network = (lanValue & maskValue) >>> 0
+  const broadcast = (network | ~maskValue) >>> 0
+
+  return REQUIRED_LAN_ADDRESSES.every((address) => {
+    const value = ipv4ToUint32(address)
+    return (
+      value !== null &&
+      ((value & maskValue) >>> 0) === network &&
+      value !== network &&
+      value !== broadcast
+    )
+  })
+}
+
+async function showUnableToSaveDialog(description: string): Promise<void> {
+  await confirmDialog({
+    title: 'Unable to save settings',
+    description,
+    confirmText: 'OK',
+    alertOnly: true
+  })
+}
+
+function getLANDHCPPoolError(mask: string, startValue: string, limitValue: string): string | null {
+  if (!/^\d+$/.test(startValue) || Number(startValue) < 100) {
+    return 'Start Address Offset must be 100 or greater.'
+  }
+
+  if (!/^\d+$/.test(limitValue) || Number(limitValue) < 1) {
+    return 'Limit must be at least 1.'
+  }
+
+  const maskValue = ipv4ToUint32(mask)
+  const lanValue = ipv4ToUint32(FIXED_LAN_IP)
+  if (maskValue === null || lanValue === null) {
+    return 'The DHCP address pool is not compatible with the current network configuration.'
+  }
+
+  const start = Number(startValue)
+  const limit = Number(limitValue)
+  const end = start + limit - 1
+  const hostMask = (~maskValue) >>> 0
+
+  if (!Number.isSafeInteger(end) || end >= hostMask) {
+    return 'The DHCP address pool does not fit inside the selected subnet mask.'
+  }
+
+  const network = (lanValue & maskValue) >>> 0
+  const overlapsReservedAddress = REQUIRED_LAN_ADDRESSES.some((address) => {
+    const value = ipv4ToUint32(address)
+    if (value === null || value < network) return true
+    const offset = value - network
+    return start <= offset && offset <= end
+  })
+
+  if (overlapsReservedAddress) {
+    return 'The DHCP address pool overlaps addresses reserved by the system.'
+  }
+
+  return null
+}
+
+function isValidInterfaceName(value: string): boolean {
+  return /^[A-Za-z0-9_]+$/.test(value.trim())
 }
 
 function splitList(value: string): string[] {
@@ -178,6 +286,10 @@ function splitList(value: string): string[] {
 function joinList(value?: string[] | null): string {
   if (!Array.isArray(value)) return ''
   return value.join('\n')
+}
+
+function stringListsEqual(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
 function interfaceTone(id: string): string {
@@ -201,6 +313,9 @@ function delay(ms: number) {
 export default function Interfaces(): JSX.Element {
   const { currentAllModule } = useCurrentAllModuleStore()
   const { devMode } = useDevModeStore()
+  const [cachedAtMount] = useState<InterfacesResponse | undefined>(() =>
+    getPageDataCache<InterfacesResponse>(INTERFACES_CACHE_KEY)
+  )
 
   const acModule = useMemo<Module | undefined>(() => {
     return (
@@ -210,13 +325,16 @@ export default function Interfaces(): JSX.Element {
     )
   }, [currentAllModule])
 
-  const [interfaces, setInterfaces] = useState<InterfaceStats[]>([])
-  const [apManagement, setApManagement] = useState<APManagementInfo[]>([])
-  const [acName, setAcName] = useState('Router')
-  const [acIp, setAcIp] = useState('')
+  const [interfaces, setInterfaces] = useState<InterfaceStats[]>(
+    () => cachedAtMount?.interfaces ?? []
+  )
+  const [apManagement, setApManagement] = useState<APManagementInfo[]>(
+    () => cachedAtMount?.ap_management ?? []
+  )
+  const [acName, setAcName] = useState(() => cachedAtMount?.ac_name || 'Router')
+  const [acIp, setAcIp] = useState(() => cachedAtMount?.ac_ip || '')
 
-  const [loading, setLoading] = useState(true)
-  const [, setBackgroundLoading] = useState(false)
+  const [loading, setLoading] = useState(() => cachedAtMount === undefined)
   const [error, setError] = useState<string | null>(null)
 
   const [isAddOpen, setIsAddOpen] = useState(false)
@@ -242,12 +360,28 @@ export default function Interfaces(): JSX.Element {
   const [editDHCPOptions, setEditDHCPOptions] = useState('')
 
   const [isSaving, setIsSaving] = useState(false)
+  const [lanRestartDeadline, setLanRestartDeadline] = useState<number | null>(null)
+  const [lanRestartCountdown, setLanRestartCountdown] = useState(0)
+
+  const orderedAPManagement = useMemo(
+    () =>
+      [...apManagement].sort((left, right) => {
+        const leftIndex =
+          typeof left.antenna_index === 'number' && left.antenna_index > 0
+            ? left.antenna_index
+            : Number.MAX_SAFE_INTEGER
+        const rightIndex =
+          typeof right.antenna_index === 'number' && right.antenna_index > 0
+            ? right.antenna_index
+            : Number.MAX_SAFE_INTEGER
+        return leftIndex - rightIndex
+      }),
+    [apManagement]
+  )
 
   const fetchInterfaces = useCallback(
     async (isBackground = false) => {
-      if (isBackground) {
-        setBackgroundLoading(true)
-      } else {
+      if (!isBackground) {
         setLoading(true)
       }
 
@@ -264,11 +398,18 @@ export default function Interfaces(): JSX.Element {
         }
 
         const data = (await res.json()) as InterfacesResponse
+        const normalizedData: InterfacesResponse = {
+          ac_name: data.ac_name || acModule?.name || 'Router',
+          ac_ip: data.ac_ip || acModule?.ipaddress || '',
+          interfaces: Array.isArray(data.interfaces) ? data.interfaces : [],
+          ap_management: Array.isArray(data.ap_management) ? data.ap_management : []
+        }
 
-        setInterfaces(Array.isArray(data.interfaces) ? data.interfaces : [])
-        setApManagement(Array.isArray(data.ap_management) ? data.ap_management : [])
-        setAcName(data.ac_name || acModule?.name || 'Router')
-        setAcIp(data.ac_ip || acModule?.ipaddress || '')
+        setPageDataCache(INTERFACES_CACHE_KEY, normalizedData)
+        setInterfaces(normalizedData.interfaces)
+        setApManagement(normalizedData.ap_management)
+        setAcName(normalizedData.ac_name)
+        setAcIp(normalizedData.ac_ip)
       } catch (err: unknown) {
         setError(getErrorMessage(err))
 
@@ -278,30 +419,18 @@ export default function Interfaces(): JSX.Element {
         }
       } finally {
         setLoading(false)
-        setBackgroundLoading(false)
       }
     },
     [acModule?.ipaddress, acModule?.name]
   )
 
   useEffect(() => {
-    void fetchInterfaces()
+    void fetchInterfaces(cachedAtMount !== undefined)
+  }, [cachedAtMount, fetchInterfaces])
 
-    let inFlight = false
-
-    const interval = window.setInterval(() => {
-      if (inFlight) return
-      inFlight = true
-
-      void fetchInterfaces(true).finally(() => {
-        inFlight = false
-      })
-    }, 5000)
-
-    return () => window.clearInterval(interval)
-  }, [fetchInterfaces])
-
-  const postInterfaceAction = async (payload: SaveInterfacePayload) => {
+  const postInterfaceAction = async (
+    payload: SaveInterfacePayload
+  ): Promise<InterfaceActionResponse> => {
     const res = await apiFetch('/api/net/interfaces', {
       method: 'POST',
       headers: {
@@ -312,9 +441,47 @@ export default function Interfaces(): JSX.Element {
 
     if (!res.ok) {
       const text = await res.text().catch(() => '')
-      throw new Error(text || 'Operation failed')
+      let message = text || 'Operation failed'
+      try {
+        const parsed = JSON.parse(text) as { error?: string }
+        if (parsed.error) message = parsed.error
+      } catch {
+        // Keep the plain response if it is not JSON.
+      }
+      throw new Error(message)
     }
+
+    return (await res.json().catch(() => ({
+      ok: true,
+      changed: true
+    }))) as InterfaceActionResponse
   }
+
+  const startLANRestartOverlay = (seconds?: number) => {
+    const duration =
+      typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0
+        ? Math.ceil(seconds)
+        : 15
+    setLanRestartCountdown(duration)
+    setLanRestartDeadline(Date.now() + duration * 1000)
+  }
+
+  useEffect(() => {
+    if (lanRestartDeadline === null) return
+
+    const updateRemaining = () => {
+      const remaining = Math.max(0, Math.ceil((lanRestartDeadline - Date.now()) / 1000))
+      setLanRestartCountdown(remaining)
+      if (remaining === 0) {
+        setLanRestartDeadline(null)
+        void fetchInterfaces(true)
+      }
+    }
+
+    updateRemaining()
+    const timer = window.setInterval(updateRemaining, 250)
+    return () => window.clearInterval(timer)
+  }, [fetchInterfaces, lanRestartDeadline])
 
   const resetAddForm = () => {
     setNewName('')
@@ -430,6 +597,13 @@ export default function Interfaces(): JSX.Element {
       return
     }
 
+    if (editTarget.id === 'lan' && !isLANNetmaskCompatible(mask)) {
+      await showUnableToSaveDialog(
+        'This subnet mask is not compatible with the current network configuration. Enter a different subnet mask and try again.'
+      )
+      return
+    }
+
     if (gateway && !isValidIPv4(gateway)) {
       toast.error('Please enter a valid IPv4 gateway or leave it blank.')
       return
@@ -442,13 +616,13 @@ export default function Interfaces(): JSX.Element {
     }
 
     if (editTarget.id === 'lan') {
-      if (!isPositiveNumber(editDHCPStart)) {
-        toast.error('DHCP start must be a non-negative number.')
-        return
-      }
-
-      if (!isPositiveNumber(editDHCPLimit)) {
-        toast.error('DHCP limit must be a non-negative number.')
+      const poolError = getLANDHCPPoolError(
+        mask,
+        editDHCPStart.trim(),
+        editDHCPLimit.trim()
+      )
+      if (poolError) {
+        await showUnableToSaveDialog(poolError)
         return
       }
 
@@ -458,11 +632,38 @@ export default function Interfaces(): JSX.Element {
       }
     }
 
+    const networkChanged =
+      ip !== (editTarget.ipaddr || '').trim() ||
+      mask !== (editTarget.netmask || '').trim() ||
+      gateway !== (editTarget.gateway || '').trim() ||
+      !stringListsEqual(dnsValues, splitList(editTarget.dns || '')) ||
+      editAuto !== (editTarget.auto !== false)
+
+    const currentDHCP = editTarget.dhcp
+    const dhcpChanged =
+      editTarget.id === 'lan' &&
+      (!currentDHCP ||
+        editDHCPEnabled !== currentDHCP.enabled ||
+        editDHCPStart.trim() !== currentDHCP.start.trim() ||
+        editDHCPLimit.trim() !== currentDHCP.limit.trim() ||
+        editDHCPLeaseTime.trim() !== currentDHCP.leasetime.trim() ||
+        editDHCPDynamic !== currentDHCP.dynamic_dhcp ||
+        editDHCPForce !== currentDHCP.force ||
+        !stringListsEqual(
+          splitList(editDHCPOptions),
+          splitList(joinList(currentDHCP.dhcp_options))
+        ))
+
+    if (!networkChanged && !dhcpChanged) {
+      setIsEditOpen(false)
+      return
+    }
+
     const confirmMsg =
       editTarget.id === 'lan'
         ? `Save changes to LAN?
 
-WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
+WARNING: Changing the subnet mask, DHCP, gateway, or DNS may temporarily disconnect clients.`
         : `Save changes to ${editTarget.id}?`
 
     if (!(await confirmDialog({ title: 'Apply interface settings?', description: confirmMsg, confirmText: 'Save' }))) return
@@ -492,9 +693,16 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
         }
       }
 
-      await postInterfaceAction(payload)
+      const result = await postInterfaceAction(payload)
 
       setIsEditOpen(false)
+
+      if (result.lan_restarting) {
+        startLANRestartOverlay(result.estimated_seconds)
+        return
+      }
+
+      if (result.changed === false) return
 
       await delay(1500)
       await fetchInterfaces()
@@ -504,6 +712,18 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
       if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
         toast.error('Network is restarting. Please reconnect if the IP changed.')
         setIsEditOpen(false)
+      } else if (
+        msg.includes('subnet mask is incompatible') ||
+        msg.includes('LAN IPv4 address is fixed') ||
+        msg.includes('DHCP start address offset') ||
+        msg.includes('DHCP address pool is incompatible')
+      ) {
+        const description = msg.includes('DHCP start address offset')
+          ? 'Start Address Offset must be 100 or greater.'
+          : msg.includes('DHCP address pool')
+            ? 'The DHCP address pool is not compatible with the current network configuration.'
+            : 'This subnet mask is not compatible with the current network configuration. Enter a different subnet mask and try again.'
+        await showUnableToSaveDialog(description)
       } else {
         toast.error('Error', { description: msg })
       }
@@ -544,10 +764,15 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
     setIsSaving(true)
 
     try {
-      await postInterfaceAction({
+      const result = await postInterfaceAction({
         action,
         interface: iface.id
       })
+
+      if (result.lan_restarting) {
+        startLANRestartOverlay(result.estimated_seconds)
+        return
+      }
 
       await delay(1500)
       await fetchInterfaces()
@@ -559,23 +784,35 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
   }
 
   return (
-    <div className="w-full p-6">
-      <div className="mx-auto max-w-6xl">
-        <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-3xl font-bold text-foreground">Interfaces</h2>
-            <p className="mt-1 text-muted-foreground">
-              Manage network interfaces and view antenna network settings.
-            </p>
+    <PageShell>
+      {lanRestartDeadline !== null && (
+        <FullScreenTaskOverlay panelClassName="flex flex-col items-center">
+          <div className="mb-5 flex size-20 items-center justify-center rounded-full border border-warning/30 bg-warning/10">
+            <RefreshCw className="size-9 animate-spin text-warning" />
           </div>
+          <h3 className="font-display text-2xl font-bold text-foreground">Restarting LAN</h3>
+          <p className="mt-3 text-sm leading-6 text-muted-foreground">
+            The network interface is restarting. Connectivity may be briefly interrupted.
+          </p>
+          <div className="mt-6 font-mono text-3xl font-semibold text-foreground">
+            {lanRestartCountdown}s
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            This page will remain open and resume automatically.
+          </p>
+        </FullScreenTaskOverlay>
+      )}
 
-          <div className="flex gap-2">
-            <Button onClick={() => setIsAddOpen(true)} disabled={isSaving}>
-              <Plus className="mr-2 h-4 w-4" />
-              Add Interface
-            </Button>
-          </div>
-        </div>
+      <PageHeader
+        title="Interfaces"
+        description="Manage network interfaces and view antenna network settings."
+        actions={
+          <Button onClick={() => setIsAddOpen(true)} disabled={isSaving}>
+            <Plus className="mr-2 h-4 w-4" />
+            Add Interface
+          </Button>
+        }
+      />
 
         {error && (
           <div className="mb-6 rounded border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
@@ -735,7 +972,7 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
 
                               {iface.can_restart && (
                                 <Button
-                                  variant="outline"
+                                  variant="warning"
                                   size="sm"
                                   onClick={() => void handleAction('restart', iface)}
                                   disabled={isSaving}
@@ -746,7 +983,7 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
 
                               {iface.can_stop && (
                                 <Button
-                                  variant="outline"
+                                  variant="destructive"
                                   size="sm"
                                   onClick={() => void handleAction('stop', iface)}
                                   disabled={isSaving}
@@ -758,9 +995,8 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
 
                               {iface.can_delete && (
                                 <Button
-                                  variant="outline"
+                                  variant="destructiveOutline"
                                   size="sm"
-                                  className="border-destructive/30 text-destructive hover:bg-destructive/10"
                                   onClick={() => void handleAction('delete', iface)}
                                   disabled={isSaving}
                                 >
@@ -793,13 +1029,13 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
               </CardHeader>
 
               <CardContent className="p-4">
-                {apManagement.length === 0 ? (
+                {orderedAPManagement.length === 0 ? (
                   <div className="rounded border border-dashed p-6 text-center text-sm text-muted-foreground">
                     No antennas found.
                   </div>
                 ) : (
                   <div className="overflow-x-auto rounded border border-border">
-                    <table className="min-w-full text-left text-xs">
+                    <Table className="min-w-full text-left text-xs">
                       <thead className="border-b border-border text-muted-foreground">
                         <tr>
                           <th className="px-3 py-2 font-medium">Antenna</th>
@@ -808,7 +1044,7 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
                       </thead>
 
                       <tbody className="divide-y divide-border">
-                        {apManagement.map((ap) => (
+                        {orderedAPManagement.map((ap) => (
                           <tr key={ap.ip || ap.name} className="hover:bg-muted">
                             <td className="px-3 py-2">
                               <div className="font-medium text-foreground">
@@ -835,7 +1071,7 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
                           </tr>
                         ))}
                       </tbody>
-                    </table>
+                    </Table>
                   </div>
                 )}
               </CardContent>
@@ -843,26 +1079,26 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
           </div>
         )}
 
-      </div>
-
-      {isAddOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-          <div className="max-w-[92vw] overflow-hidden rounded-lg bg-card shadow-xl sm:w-[520px]">
-            <div className="border-b border-border px-6 py-4">
-              <h3 className="text-lg font-semibold text-foreground">Add New Interface</h3>
-              <p className="text-sm text-muted-foreground">
-                Create a safe LAN alias interface.
-              </p>
-            </div>
+      <Dialog
+        open={isAddOpen}
+        onOpenChange={(open) => {
+          setIsAddOpen(open)
+          if (!open) resetAddForm()
+        }}
+      >
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle>Add New Interface</DialogTitle>
+            <DialogDescription>Create a safe LAN alias interface.</DialogDescription>
+          </DialogHeader>
 
             <div className="space-y-4 p-6">
               <div className="space-y-1.5">
-                <label className="text-sm font-medium text-foreground">Name</label>
-                <input
+                <Label>Name</Label>
+                <Input
                   type="text"
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
-                  className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
                 />
                 <div className="text-xs text-muted-foreground">
                   Letters, numbers, and underscore only.
@@ -871,59 +1107,53 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium text-foreground">Protocol</label>
-                  <select
+                  <Label>Protocol</Label>
+                  <NativeSelect
                     value="static"
                     disabled
-                    className="w-full rounded-md border bg-muted px-3 py-2 text-muted-foreground"
+                    className="bg-muted text-muted-foreground"
                   >
                     <option value="static">Static address</option>
-                  </select>
+                  </NativeSelect>
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium text-foreground">Device</label>
-                  <select
+                  <Label>Device</Label>
+                  <NativeSelect
                     value="@lan"
                     disabled
-                    className="w-full rounded-md border bg-muted px-3 py-2 text-muted-foreground"
+                    className="bg-muted text-muted-foreground"
                   >
                     <option value="@lan">Alias Interface: "@lan"</option>
-                  </select>
+                  </NativeSelect>
                 </div>
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-sm font-medium text-foreground">IPv4 Address</label>
-                <input
+                <Label>IPv4 Address</Label>
+                <Input
                   type="text"
                   value={newIp}
                   onChange={(e) => setNewIp(e.target.value)}
-                  className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
                 />
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-sm font-medium text-foreground">IPv4 Netmask</label>
-                <input
+                <Label>IPv4 Netmask</Label>
+                <Input
                   type="text"
                   value={newMask}
                   onChange={(e) => setNewMask(e.target.value)}
-                  className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
                 />
               </div>
 
-              <label className="flex items-center gap-2 text-sm text-foreground">
-                <input
-                  type="checkbox"
-                  checked={newAuto}
-                  onChange={(e) => setNewAuto(e.target.checked)}
-                />
+              <Label className="flex items-center gap-2">
+                <Switch checked={newAuto} onCheckedChange={setNewAuto} />
                 Bring up on boot
-              </label>
+              </Label>
             </div>
 
-            <div className="flex justify-end gap-3 border-t border-border px-6 py-4">
+            <DialogFooter>
               <Button
                 variant="outline"
                 onClick={() => {
@@ -938,47 +1168,38 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
               <Button onClick={handleCreateInterface} disabled={isSaving}>
                 {isSaving ? 'Creating...' : 'Create Interface'}
               </Button>
-            </div>
-          </div>
-        </div>
-      )}
+            </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-      {isEditOpen && editTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-          <div className="max-w-[92vw] overflow-hidden rounded-lg bg-card shadow-xl sm:w-[640px]">
-            <div className="border-b border-border px-6 py-4">
-              <h3 className="text-lg font-semibold text-foreground">
-                Edit {editTarget.name || editTarget.id}
-              </h3>
-              <p className="text-sm text-muted-foreground">Modify safe interface settings.</p>
-            </div>
+      <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
+        {editTarget && (
+          <DialogContent className="sm:max-w-[640px]">
+            <DialogHeader>
+              <DialogTitle>Edit {editTarget.name || editTarget.id}</DialogTitle>
+              <DialogDescription>Modify safe interface settings.</DialogDescription>
+            </DialogHeader>
 
             <div className="border-b px-6 pt-4">
               <div className="flex gap-2">
-                <button
+                <Button
                   type="button"
+                  size="sm"
+                  variant={editTab === 'general' ? 'secondary' : 'ghost'}
                   onClick={() => setEditTab('general')}
-                  className={`rounded-t-md border px-3 py-2 text-sm ${
-                    editTab === 'general'
-                      ? 'border-b-border bg-card text-primary'
-                      : 'bg-muted text-muted-foreground'
-                  }`}
                 >
                   General Settings
-                </button>
+                </Button>
 
                 {editTarget.id === 'lan' && (
-                  <button
+                  <Button
                     type="button"
+                    size="sm"
+                    variant={editTab === 'dhcp' ? 'secondary' : 'ghost'}
                     onClick={() => setEditTab('dhcp')}
-                    className={`rounded-t-md border px-3 py-2 text-sm ${
-                      editTab === 'dhcp'
-                        ? 'border-b-border bg-card text-primary'
-                        : 'bg-muted text-muted-foreground'
-                    }`}
                   >
                     DHCP Server
-                  </button>
+                  </Button>
                 )}
               </div>
             </div>
@@ -988,8 +1209,8 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
                 <div className="flex items-start gap-2 rounded-md bg-warning/10 p-3 text-sm text-warning">
                   <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
                   <p>
-                    Changing LAN IP, DHCP, gateway, or DNS may disconnect clients. Reconnect to the
-                    new address if the management IP changes.
+                    Changing the subnet mask, DHCP, gateway, or DNS may temporarily disconnect
+                    clients.
                   </p>
                 </div>
               )}
@@ -998,70 +1219,77 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
                 <>
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-foreground">Protocol</label>
-                      <select
+                      <Label>Protocol</Label>
+                      <NativeSelect
                         value="static"
                         disabled
-                        className="w-full rounded-md border bg-muted px-3 py-2 text-muted-foreground"
+                        className="bg-muted text-muted-foreground"
                       >
                         <option value="static">{editTarget.protocol || 'Static address'}</option>
-                      </select>
+                      </NativeSelect>
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-foreground">Device</label>
-                      <select
+                      <Label>Device</Label>
+                      <NativeSelect
                         value={editTarget.device || '@lan'}
                         disabled
-                        className="w-full rounded-md border bg-muted px-3 py-2 text-muted-foreground"
+                        className="bg-muted text-muted-foreground"
                       >
                         <option value={editTarget.device || '@lan'}>
                           {editTarget.device || '@lan'}
                         </option>
-                      </select>
+                      </NativeSelect>
                     </div>
                   </div>
 
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-foreground">IPv4 Address</label>
-                      <input
+                      <Label>
+                        IPv4 Address{editTarget.id === 'lan' ? ' (Fixed)' : ''}
+                      </Label>
+                      <Input
                         type="text"
                         value={editIp}
                         onChange={(e) => setEditIp(e.target.value)}
-                        className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
+                        disabled={editTarget.id === 'lan'}
+                        className={
+                          editTarget.id === 'lan' ? 'bg-muted text-muted-foreground' : undefined
+                        }
                       />
+                      {editTarget.id === 'lan' ? (
+                        <div className="text-xs text-muted-foreground">
+                          This management address is reserved by the system.
+                        </div>
+                      ) : null}
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-foreground">IPv4 Netmask</label>
-                      <input
+                      <Label>IPv4 Netmask</Label>
+                      <Input
                         type="text"
                         value={editMask}
                         onChange={(e) => setEditMask(e.target.value)}
-                        className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
                       />
                     </div>
                   </div>
 
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-foreground">IPv4 Gateway</label>
-                      <input
+                      <Label>IPv4 Gateway</Label>
+                      <Input
                         type="text"
                         value={editGateway}
                         onChange={(e) => setEditGateway(e.target.value)}
-                        className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
                       />
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-foreground">DNS Servers</label>
-                      <input
+                      <Label>DNS Servers</Label>
+                      <Input
                         type="text"
                         value={editDns}
                         onChange={(e) => setEditDns(e.target.value)}
-                        className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
                       />
                       <div className="text-xs text-muted-foreground">
                         Separate multiple DNS servers with spaces or commas.
@@ -1071,104 +1299,90 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
 
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-foreground">Firewall Zone</label>
-                      <input
+                      <Label>Firewall Zone</Label>
+                      <Input
                         type="text"
                         value={editTarget.firewall_zone || 'lan'}
                         readOnly
-                        className="w-full rounded-md border bg-muted px-3 py-2 text-muted-foreground"
+                        className="bg-muted text-muted-foreground"
                       />
                     </div>
 
-                    <label className="flex items-center gap-2 pt-7 text-sm text-foreground">
-                      <input
-                        type="checkbox"
-                        checked={editAuto}
-                        onChange={(e) => setEditAuto(e.target.checked)}
-                      />
+                    <Label className="flex items-center gap-2 pt-7">
+                      <Switch checked={editAuto} onCheckedChange={setEditAuto} />
                       Bring up on boot
-                    </label>
+                    </Label>
                   </div>
                 </>
               ) : (
                 <>
-                  <label className="flex items-center justify-between gap-3 rounded border p-3 text-sm">
+                  <Label className="flex items-center justify-between gap-3 rounded border p-3">
                     <div>
                       <div className="font-medium text-foreground">Enable DHCP Server</div>
                       <div className="text-xs text-muted-foreground">
                         When disabled, this interface will not serve DHCP leases.
                       </div>
                     </div>
-                    <input
-                      type="checkbox"
-                      checked={editDHCPEnabled}
-                      onChange={(e) => setEditDHCPEnabled(e.target.checked)}
-                    />
-                  </label>
+                    <Switch checked={editDHCPEnabled} onCheckedChange={setEditDHCPEnabled} />
+                  </Label>
 
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-foreground">Start Address Offset</label>
-                      <input
-                        type="text"
+                      <Label>Start Address Offset</Label>
+                      <Input
+                        type="number"
+                        min={100}
+                        step={1}
                         value={editDHCPStart}
                         onChange={(e) => setEditDHCPStart(e.target.value)}
-                        className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
                         disabled={!editDHCPEnabled}
                       />
+                      <div className="text-xs text-muted-foreground">
+                        Minimum 100. Lower addresses are reserved by the system.
+                      </div>
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-foreground">Limit</label>
-                      <input
-                        type="text"
+                      <Label>Limit</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        step={1}
                         value={editDHCPLimit}
                         onChange={(e) => setEditDHCPLimit(e.target.value)}
-                        className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
                         disabled={!editDHCPEnabled}
                       />
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-foreground">Lease Time</label>
-                      <input
+                      <Label>Lease Time</Label>
+                      <Input
                         type="text"
                         value={editDHCPLeaseTime}
                         onChange={(e) => setEditDHCPLeaseTime(e.target.value)}
-                        className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
                         disabled={!editDHCPEnabled}
                       />
                     </div>
                   </div>
 
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <label className="flex items-center gap-2 rounded border p-3 text-sm text-foreground">
-                      <input
-                        type="checkbox"
-                        checked={editDHCPDynamic}
-                        onChange={(e) => setEditDHCPDynamic(e.target.checked)}
-                        disabled={!editDHCPEnabled}
-                      />
+                    <Label className="flex items-center gap-2 rounded border p-3">
+                      <Switch checked={editDHCPDynamic} onCheckedChange={setEditDHCPDynamic} disabled={!editDHCPEnabled} />
                       Dynamic DHCP
-                    </label>
+                    </Label>
 
-                    <label className="flex items-center gap-2 rounded border p-3 text-sm text-foreground">
-                      <input
-                        type="checkbox"
-                        checked={editDHCPForce}
-                        onChange={(e) => setEditDHCPForce(e.target.checked)}
-                        disabled={!editDHCPEnabled}
-                      />
+                    <Label className="flex items-center gap-2 rounded border p-3">
+                      <Switch checked={editDHCPForce} onCheckedChange={setEditDHCPForce} disabled={!editDHCPEnabled} />
                       Force DHCP
-                    </label>
+                    </Label>
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="text-sm font-medium text-foreground">DHCP Options</label>
-                    <textarea
+                    <Label>DHCP Options</Label>
+                    <Textarea
                       value={editDHCPOptions}
                       onChange={(e) => setEditDHCPOptions(e.target.value)}
-                      className="min-h-[90px] w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring"
+                      className="min-h-[90px]"
                       disabled={!editDHCPEnabled}
                     />
                     <div className="text-xs text-muted-foreground">
@@ -1179,7 +1393,7 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
               )}
             </div>
 
-            <div className="flex justify-end gap-3 border-t border-border px-6 py-4">
+            <DialogFooter>
               <Button variant="outline" onClick={() => setIsEditOpen(false)} disabled={isSaving}>
                 Cancel
               </Button>
@@ -1187,10 +1401,10 @@ WARNING: Changing LAN IP, DHCP, gateway, or DNS may disconnect clients.`
               <Button onClick={handleSaveEdit} disabled={isSaving}>
                 {isSaving ? 'Saving...' : 'Save & Apply'}
               </Button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+            </DialogFooter>
+          </DialogContent>
+        )}
+      </Dialog>
+    </PageShell>
   )
 }

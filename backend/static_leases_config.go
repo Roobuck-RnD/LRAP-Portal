@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -16,6 +18,16 @@ type StaticLeaseConfig struct {
 	MAC      string `json:"mac"`
 	IPAddr   string `json:"ipaddr"`
 }
+
+type staticLeaseValidationError struct {
+	message string
+}
+
+func (e staticLeaseValidationError) Error() string {
+	return e.message
+}
+
+var staticLeaseMACPattern = regexp.MustCompile(`^([0-9A-F]{2}:){5}[0-9A-F]{2}$`)
 
 // ---------- SID Helper ----------
 
@@ -109,8 +121,25 @@ func applyLocalUciLeaseChange(sid string, action func(currentSid string) error) 
 // staticLeaseUpsert adds or updates the dhcp host reservation matched by MAC.
 // Returns the affected section and whether it was an update (vs a fresh add).
 func staticLeaseUpsert(sid, mac, ip, name string) (string, bool, error) {
+	mac = staticLeaseNormalizeMAC(mac)
+	ip = strings.TrimSpace(ip)
+
 	existing, err := getUciStaticLeasesLocal(sid)
 	if err != nil {
+		return "", false, err
+	}
+
+	networkSections, err := ifaceGetNetworkInterfaceSections(resolveSid("", sid))
+	if err != nil {
+		return "", false, fmt.Errorf("read LAN configuration failed: %v", err)
+	}
+	lanValues, ok := networkSections["lan"]
+	if !ok {
+		return "", false, fmt.Errorf("LAN configuration not found")
+	}
+	lanIP := strings.TrimSpace(ifaceValueToString(lanValues["ipaddr"]))
+	netmask := strings.TrimSpace(ifaceValueToString(lanValues["netmask"]))
+	if err := staticLeaseValidateAssignment(existing, mac, ip, lanIP, netmask); err != nil {
 		return "", false, err
 	}
 
@@ -159,6 +188,8 @@ func staticLeaseUpsert(sid, mac, ip, name string) (string, bool, error) {
 // staticLeaseDeleteByMAC removes the dhcp host reservation matched by MAC.
 // Returns the removed section and whether anything was removed.
 func staticLeaseDeleteByMAC(sid, mac string) (string, bool, error) {
+	mac = staticLeaseNormalizeMAC(mac)
+
 	existing, err := getUciStaticLeasesLocal(sid)
 	if err != nil {
 		return "", false, err
@@ -190,6 +221,74 @@ func staticLeaseDeleteBySection(sid, section string) error {
 	})
 }
 
+func staticLeaseNormalizeMAC(mac string) string {
+	return strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(mac), "-", ":"))
+}
+
+func staticLeaseValidateAssignment(
+	existing []StaticLeaseConfig,
+	mac string,
+	ip string,
+	lanIP string,
+	netmask string,
+) error {
+	if !staticLeaseMACPattern.MatchString(staticLeaseNormalizeMAC(mac)) {
+		return staticLeaseValidationError{message: "invalid MAC address"}
+	}
+
+	ipValue, valid := ifaceIPv4ToUint32(ip)
+	if !valid {
+		return staticLeaseValidationError{message: "invalid IPv4 address"}
+	}
+	lanValue, valid := ifaceIPv4ToUint32(lanIP)
+	if !valid {
+		return fmt.Errorf("invalid LAN IPv4 configuration")
+	}
+	maskValue, valid := ifaceIPv4ToUint32(netmask)
+	if !valid || !ifaceIsValidNetmask(netmask) {
+		return fmt.Errorf("invalid LAN netmask configuration")
+	}
+
+	network := lanValue & maskValue
+	broadcast := network | ^maskValue
+	if ipValue&maskValue != network || ipValue == network || ipValue == broadcast {
+		return staticLeaseValidationError{message: "IPv4 address is outside the current LAN subnet"}
+	}
+
+	lanParts := strings.Split(lanIP, ".")
+	ipParts := strings.Split(ip, ".")
+	if len(lanParts) != 4 || len(ipParts) != 4 {
+		return staticLeaseValidationError{message: "invalid IPv4 address"}
+	}
+	lastOctet, err := strconv.Atoi(ipParts[3])
+	samePrefix := lanParts[0] == ipParts[0] &&
+		lanParts[1] == ipParts[1] &&
+		lanParts[2] == ipParts[2]
+	if err != nil || !samePrefix || lastOctet < 6 || lastOctet > 99 {
+		prefix := strings.Join(lanParts[:3], ".")
+		return staticLeaseValidationError{
+			message: fmt.Sprintf("IPv4 address must be between %s.6 and %s.99", prefix, prefix),
+		}
+	}
+
+	normalizedMAC := staticLeaseNormalizeMAC(mac)
+	for _, lease := range existing {
+		if strings.TrimSpace(lease.IPAddr) == ip &&
+			staticLeaseNormalizeMAC(lease.MAC) != normalizedMAC {
+			return staticLeaseValidationError{message: "IPv4 address is already assigned to another device"}
+		}
+	}
+
+	return nil
+}
+
+func staticLeaseErrorStatus(err error) int {
+	if _, ok := err.(staticLeaseValidationError); ok {
+		return http.StatusBadRequest
+	}
+	return http.StatusInternalServerError
+}
+
 // ---------- HTTP Handler: AC-only ----------
 
 func staticLeaseConfigHandler(w http.ResponseWriter, r *http.Request) {
@@ -216,7 +315,7 @@ func staticLeaseConfigHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		req.Hostname = strings.TrimSpace(req.Hostname)
-		req.MAC = strings.ToUpper(strings.TrimSpace(req.MAC))
+		req.MAC = staticLeaseNormalizeMAC(req.MAC)
 		req.IPAddr = strings.TrimSpace(req.IPAddr)
 
 		if req.MAC == "" || req.IPAddr == "" {
@@ -225,7 +324,7 @@ func staticLeaseConfigHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if _, _, err := staticLeaseUpsert(sid, req.MAC, req.IPAddr, req.Hostname); err != nil {
-			http.Error(w, fmt.Sprintf(`{"error":"save failed: %v"}`, err), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf(`{"error":"save failed: %v"}`, err), staticLeaseErrorStatus(err))
 			return
 		}
 
