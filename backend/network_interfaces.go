@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os/exec"
@@ -51,14 +52,15 @@ type InterfaceStats struct {
 }
 
 type APManagementInfo struct {
-	Name    string `json:"name"`
-	IP      string `json:"ip"`
-	Online  bool   `json:"online"`
-	IPAddr  string `json:"ipaddr"`
-	Netmask string `json:"netmask"`
-	Gateway string `json:"gateway"`
-	DNS     string `json:"dns"`
-	Error   string `json:"error,omitempty"`
+	Name         string `json:"name"`
+	AntennaIndex int    `json:"antenna_index,omitempty"`
+	IP           string `json:"ip"`
+	Online       bool   `json:"online"`
+	IPAddr       string `json:"ipaddr"`
+	Netmask      string `json:"netmask"`
+	Gateway      string `json:"gateway"`
+	DNS          string `json:"dns"`
+	Error        string `json:"error,omitempty"`
 }
 
 type InterfacesResponse struct {
@@ -90,8 +92,21 @@ type InterfaceActionReq struct {
 	Auto      *bool             `json:"auto"`
 }
 
+type InterfaceActionResponse struct {
+	OK               bool `json:"ok"`
+	Changed          bool `json:"changed"`
+	LANRestarting    bool `json:"lan_restarting,omitempty"`
+	EstimatedSeconds int  `json:"estimated_seconds,omitempty"`
+}
 
 var ifaceNameRe = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
+
+var (
+	errIfaceLANIPFixed             = errors.New("LAN IPv4 address is fixed")
+	errIfaceLANNetmaskIncompatible = errors.New("subnet mask is incompatible with current network configuration")
+	errIfaceDHCPStartTooLow        = errors.New("DHCP start address offset must be 100 or greater")
+	errIfaceDHCPPoolIncompatible   = errors.New("DHCP address pool is incompatible with current network configuration")
+)
 
 // ---------- HTTP Handler ----------
 
@@ -155,7 +170,7 @@ func ifaceGetLocalInterfaces(localSid string) ([]InterfaceStats, error) {
 	}
 
 	firewallZones := ifaceGetFirewallZoneByNetwork(localSid)
-	dhcpSections := ifaceGetDHCPInterfaceSections(localSid)
+	dhcpSections := ifaceGetDHCPSectionsByName(localSid)
 
 	dumpByID := map[string]map[string]any{}
 
@@ -213,7 +228,10 @@ func ifaceGetLocalInterfaces(localSid string) ([]InterfaceStats, error) {
 		}
 
 		if id == "lan" {
-			stat.DHCP = ifaceDHCPSettingsFromValues(dhcpSections[id])
+			// Read the explicitly named dhcp.lan section. Multiple DHCP pools
+			// can intentionally share interface=lan, so indexing by interface
+			// would allow an internal pool to overwrite this value.
+			stat.DHCP = ifaceDHCPSettingsFromValues(dhcpSections["lan"])
 		}
 
 		if dumpIface, ok := dumpByID[id]; ok {
@@ -499,7 +517,7 @@ func ifaceGetFirewallZoneByNetwork(localSid string) map[string]string {
 	return out
 }
 
-func ifaceGetDHCPInterfaceSections(localSid string) map[string]map[string]any {
+func ifaceGetDHCPSectionsByName(localSid string) map[string]map[string]any {
 	out := map[string]map[string]any{}
 
 	res, err := ubusCallJSONLocal(localSid, "uci", "get", map[string]any{
@@ -521,11 +539,7 @@ func ifaceGetDHCPInterfaceSections(localSid string) map[string]map[string]any {
 			continue
 		}
 
-		iface := ifaceValueToString(m["interface"])
-		if iface == "" {
-			iface = sectionName
-		}
-		out[iface] = m
+		out[sectionName] = m
 	}
 
 	return out
@@ -556,7 +570,7 @@ func ifaceDHCPSettingsFromValues(values map[string]any) *InterfaceDHCPSettings {
 }
 
 func ifaceEnsureLanDHCPSection(localSid string) error {
-	sections := ifaceGetDHCPInterfaceSections(localSid)
+	sections := ifaceGetDHCPSectionsByName(localSid)
 	if _, ok := sections["lan"]; ok {
 		return nil
 	}
@@ -576,9 +590,13 @@ func ifaceEnsureLanDHCPSection(localSid string) error {
 	return nil
 }
 
-func ifaceUpdateLanDHCP(localSid string, req *InterfaceDHCPReq) error {
+func ifaceUpdateLanDHCP(localSid string, netmask string, req *InterfaceDHCPReq) error {
 	if req == nil {
 		return nil
+	}
+
+	if err := ifaceValidateLanDHCPPool(netmask, req); err != nil {
+		return err
 	}
 
 	if err := ifaceEnsureLanDHCPSection(localSid); err != nil {
@@ -593,22 +611,12 @@ func ifaceUpdateLanDHCP(localSid string, req *InterfaceDHCPReq) error {
 		return fmt.Errorf("dhcp start, limit and lease time are required")
 	}
 
-	startNum, err := strconv.Atoi(start)
-	if err != nil || startNum < 1 || startNum > 65535 {
-		return fmt.Errorf("invalid dhcp start")
-	}
-
-	limitNum, err := strconv.Atoi(limit)
-	if err != nil || limitNum < 1 || limitNum > 65535 {
-		return fmt.Errorf("invalid dhcp limit")
-	}
-
 	ignore := "0"
 	if !req.Enabled {
 		ignore = "1"
 	}
 
-	_, err = ubusCallJSONLocal(localSid, "uci", "set", map[string]any{
+	_, err := ubusCallJSONLocal(localSid, "uci", "set", map[string]any{
 		"config":  "dhcp",
 		"section": "lan",
 		"values": map[string]string{
@@ -619,6 +627,7 @@ func ifaceUpdateLanDHCP(localSid string, req *InterfaceDHCPReq) error {
 			"leasetime":   leasetime,
 			"dynamicdhcp": ifaceBoolToUCI(req.DynamicDHCP),
 			"force":       ifaceBoolToUCI(req.Force),
+			"tag":         "!rbap",
 		},
 	})
 	if err != nil {
@@ -724,16 +733,21 @@ func handleInterfaceAction(w http.ResponseWriter, r *http.Request, localSid stri
 	req.Netmask = strings.TrimSpace(req.Netmask)
 
 	var err error
+	result := InterfaceActionResponse{OK: true, Changed: true}
 
 	switch req.Action {
 	case "create":
 		err = ifaceCreateAlias(localSid, req)
 
 	case "edit":
-		err = ifaceEdit(localSid, req)
+		result, err = ifaceEdit(localSid, req)
 
 	case "restart":
 		err = ifaceRestart(localSid, req.Interface)
+		if err == nil && req.Interface == "lan" {
+			result.LANRestarting = true
+			result.EstimatedSeconds = 15
+		}
 
 	case "stop":
 		err = ifaceStop(localSid, req.Interface)
@@ -747,12 +761,19 @@ func handleInterfaceAction(w http.ResponseWriter, r *http.Request, localSid stri
 	}
 
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"%v"}`, err), http.StatusInternalServerError)
+		status := http.StatusInternalServerError
+		if errors.Is(err, errIfaceLANIPFixed) ||
+			errors.Is(err, errIfaceLANNetmaskIncompatible) ||
+			errors.Is(err, errIfaceDHCPStartTooLow) ||
+			errors.Is(err, errIfaceDHCPPoolIncompatible) {
+			status = http.StatusBadRequest
+		}
+		http.Error(w, fmt.Sprintf(`{"error":"%v"}`, err), status)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"ok":true}`))
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 func ifaceCreateAlias(localSid string, req InterfaceActionReq) error {
@@ -819,27 +840,41 @@ func ifaceCreateAlias(localSid string, req InterfaceActionReq) error {
 	return nil
 }
 
-func ifaceEdit(localSid string, req InterfaceActionReq) error {
+func ifaceEdit(localSid string, req InterfaceActionReq) (InterfaceActionResponse, error) {
+	result := InterfaceActionResponse{OK: true}
+
 	if req.Interface == "" {
-		return fmt.Errorf("missing interface")
+		return result, fmt.Errorf("missing interface")
 	}
 
 	if req.IPAddr == "" || req.Netmask == "" {
-		return fmt.Errorf("ipaddr and netmask are required")
+		return result, fmt.Errorf("ipaddr and netmask are required")
 	}
 
 	if !ifaceIsValidNetmask(req.Netmask) {
-		return fmt.Errorf("invalid netmask")
+		return result, fmt.Errorf("invalid netmask")
+	}
+
+	if req.Interface == "lan" {
+		if req.IPAddr != ACManagementIP {
+			return result, errIfaceLANIPFixed
+		}
+		if !ifaceNetmaskSupportsRequiredAddresses(req.Netmask) {
+			return result, errIfaceLANNetmaskIncompatible
+		}
+		if err := ifaceValidateLanDHCPPool(req.Netmask, req.DHCP); err != nil {
+			return result, err
+		}
 	}
 
 	ifaceSections, err := ifaceGetNetworkInterfaceSections(localSid)
 	if err != nil {
-		return err
+		return result, err
 	}
 
 	values, exists := ifaceSections[req.Interface]
 	if !exists {
-		return fmt.Errorf("interface not found")
+		return result, fmt.Errorf("interface not found")
 	}
 
 	proto := ifaceValueToString(values["proto"])
@@ -849,75 +884,181 @@ func ifaceEdit(localSid string, req InterfaceActionReq) error {
 	}
 
 	if !ifaceIsEditable(req.Interface, proto, device) {
-		return fmt.Errorf("interface is read-only")
+		return result, fmt.Errorf("interface is read-only")
 	}
 
-	auto := "1"
-	if req.Auto != nil && !*req.Auto {
-		auto = "0"
+	currentIP := strings.TrimSpace(ifaceValueToString(values["ipaddr"]))
+	currentNetmask := strings.TrimSpace(ifaceValueToString(values["netmask"]))
+	currentGateway := strings.TrimSpace(ifaceValueToString(values["gateway"]))
+	currentDNS := ifaceValueToList(values["dns"])
+	currentAuto := ifaceAutoValue(values["auto"])
+
+	requestedGateway := strings.TrimSpace(req.Gateway)
+	requestedDNS := ifaceSplitList(req.DNS)
+	requestedAuto := currentAuto
+	if req.Auto != nil {
+		requestedAuto = *req.Auto
 	}
 
-	networkValues := map[string]any{
-		"proto":   "static",
-		"ipaddr":  req.IPAddr,
-		"netmask": req.Netmask,
-		"auto":    auto,
-	}
-
-	if strings.TrimSpace(req.Gateway) != "" {
-		networkValues["gateway"] = strings.TrimSpace(req.Gateway)
-	} else {
-		ifaceDeleteNetworkOption(localSid, req.Interface, "gateway")
-	}
-
-	dnsList := ifaceSplitList(req.DNS)
-	if len(dnsList) > 0 {
-		networkValues["dns"] = dnsList
-	} else {
-		ifaceDeleteNetworkOption(localSid, req.Interface, "dns")
-	}
-
-	_, err = ubusCallJSONLocal(localSid, "uci", "set", map[string]any{
-		"config":  "network",
-		"section": req.Interface,
-		"values":  networkValues,
-	})
-	if err != nil {
-		return fmt.Errorf("uci set failed: %v", err)
-	}
-
-	if req.Interface != "lan" {
-		_, _ = ubusCallJSONLocal(localSid, "uci", "set", map[string]any{
-			"config":  "network",
-			"section": req.Interface,
-			"values": map[string]string{
-				"device": "@lan",
-			},
-		})
-	}
+	ipChanged := currentIP != req.IPAddr
+	netmaskChanged := currentNetmask != req.Netmask
+	gatewayChanged := currentGateway != requestedGateway
+	dnsChanged := !ifaceStringListsEqual(currentDNS, requestedDNS)
+	autoChanged := currentAuto != requestedAuto
+	networkChanged := ipChanged || netmaskChanged || gatewayChanged || dnsChanged || autoChanged
 
 	dhcpChanged := false
 	if req.Interface == "lan" && req.DHCP != nil {
-		if err := ifaceUpdateLanDHCP(localSid, req.DHCP); err != nil {
-			return err
-		}
-		dhcpChanged = true
+		dhcpSections := ifaceGetDHCPSectionsByName(localSid)
+		currentDHCP := ifaceDHCPSettingsFromValues(dhcpSections["lan"])
+		dhcpChanged = !ifaceDHCPRequestMatchesSettings(req.DHCP, currentDHCP)
 	}
 
-	if err := ifaceCommitNetwork(localSid); err != nil {
-		return err
+	result.Changed = networkChanged || dhcpChanged
+	if !result.Changed {
+		return result, nil
+	}
+
+	if networkChanged {
+		auto := "0"
+		if requestedAuto {
+			auto = "1"
+		}
+
+		networkValues := map[string]any{
+			"proto":   "static",
+			"ipaddr":  req.IPAddr,
+			"netmask": req.Netmask,
+			"auto":    auto,
+		}
+
+		if requestedGateway != "" {
+			networkValues["gateway"] = requestedGateway
+		} else if gatewayChanged {
+			ifaceDeleteNetworkOption(localSid, req.Interface, "gateway")
+		}
+
+		if len(requestedDNS) > 0 {
+			networkValues["dns"] = requestedDNS
+		} else if dnsChanged {
+			ifaceDeleteNetworkOption(localSid, req.Interface, "dns")
+		}
+
+		_, err = ubusCallJSONLocal(localSid, "uci", "set", map[string]any{
+			"config":  "network",
+			"section": req.Interface,
+			"values":  networkValues,
+		})
+		if err != nil {
+			return result, fmt.Errorf("uci set failed: %v", err)
+		}
+
+		if req.Interface != "lan" {
+			_, _ = ubusCallJSONLocal(localSid, "uci", "set", map[string]any{
+				"config":  "network",
+				"section": req.Interface,
+				"values": map[string]string{
+					"device": "@lan",
+				},
+			})
+		}
+	}
+
+	if dhcpChanged {
+		if err := ifaceUpdateLanDHCP(localSid, req.Netmask, req.DHCP); err != nil {
+			return result, err
+		}
+	}
+
+	if networkChanged {
+		if err := ifaceCommitNetwork(localSid); err != nil {
+			return result, err
+		}
 	}
 
 	if dhcpChanged {
 		if err := ifaceCommitDHCP(localSid); err != nil {
-			return err
+			return result, err
 		}
-		ifaceAsyncRestartDNSMasq()
 	}
 
-	ifaceAsyncRestart(req.Interface)
+	if req.Interface == "lan" {
+		if netmaskChanged {
+			result.LANRestarting = true
+			result.EstimatedSeconds = 15
+			ifaceAsyncRestart(req.Interface)
+		} else if gatewayChanged {
+			ifaceAsyncApplyGateway(device, currentGateway, requestedGateway)
+		}
 
-	return nil
+		if dhcpChanged || dnsChanged || netmaskChanged {
+			ifaceAsyncRestartDNSMasq()
+		}
+	} else if networkChanged {
+		ifaceAsyncRestart(req.Interface)
+	}
+
+	return result, nil
+}
+
+func ifaceDHCPRequestMatchesSettings(req *InterfaceDHCPReq, current *InterfaceDHCPSettings) bool {
+	if req == nil || current == nil {
+		return req == nil && current == nil
+	}
+
+	return req.Enabled == current.Enabled &&
+		strings.TrimSpace(req.Start) == strings.TrimSpace(current.Start) &&
+		strings.TrimSpace(req.Limit) == strings.TrimSpace(current.Limit) &&
+		strings.TrimSpace(req.LeaseTime) == strings.TrimSpace(current.LeaseTime) &&
+		req.DynamicDHCP == current.DynamicDHCP &&
+		req.Force == current.Force &&
+		ifaceStringListsEqual(req.DHCPOptions, current.DHCPOptions)
+}
+
+func ifaceStringListsEqual(left []string, right []string) bool {
+	leftNormalized := make([]string, 0, len(left))
+	for _, value := range left {
+		if value = strings.TrimSpace(value); value != "" {
+			leftNormalized = append(leftNormalized, value)
+		}
+	}
+
+	rightNormalized := make([]string, 0, len(right))
+	for _, value := range right {
+		if value = strings.TrimSpace(value); value != "" {
+			rightNormalized = append(rightNormalized, value)
+		}
+	}
+
+	if len(leftNormalized) != len(rightNormalized) {
+		return false
+	}
+	for i := range leftNormalized {
+		if leftNormalized[i] != rightNormalized[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func ifaceAsyncApplyGateway(device string, oldGateway string, newGateway string) {
+	device = strings.TrimSpace(device)
+	oldGateway = strings.TrimSpace(oldGateway)
+	newGateway = strings.TrimSpace(newGateway)
+	if device == "" {
+		device = "br-lan"
+	}
+
+	go func() {
+		time.Sleep(1 * time.Second)
+
+		if oldGateway != "" && oldGateway != newGateway {
+			_ = exec.Command("/sbin/ip", "route", "del", "default", "via", oldGateway, "dev", device).Run()
+		}
+		if newGateway != "" {
+			_ = exec.Command("/sbin/ip", "route", "replace", "default", "via", newGateway, "dev", device).Run()
+		}
+	}()
 }
 
 func ifaceRestart(localSid string, name string) error {
@@ -1117,9 +1258,10 @@ func ifaceGetSingleAPManagement(ip string, portIndex int) APManagementInfo {
 	// portIndex>0 时 apDisplayName 直接返回 Antenna<N>(忽略 hostname 参数);
 	// 解析不出口时才回退到括号里的名字(离线用 "AP "+ip,在线用真实 hostname)。
 	info := APManagementInfo{
-		Name:   apDisplayName("AP "+ip, portIndex),
-		IP:     ip,
-		Online: false,
+		Name:         apDisplayName("AP "+ip, portIndex),
+		AntennaIndex: portIndex,
+		IP:           ip,
+		Online:       false,
 	}
 
 	if !ifacePingOnce(ip) {
@@ -1194,41 +1336,25 @@ func ifacePingOnce(ip string) bool {
 func ifaceSortAPManagement(items []APManagementInfo) {
 	for i := 0; i < len(items); i++ {
 		for j := i + 1; j < len(items); j++ {
-			if ifaceIPSortKey(items[j].IP) < ifaceIPSortKey(items[i].IP) {
+			left := items[i].AntennaIndex
+			right := items[j].AntennaIndex
+			if left <= 0 {
+				left = 999
+			}
+			if right <= 0 {
+				right = 999
+			}
+			if right < left {
 				items[i], items[j] = items[j], items[i]
 			}
 		}
 	}
 }
 
-func ifaceIPSortKey(ip string) int {
-	parts := strings.Split(ip, ".")
-	if len(parts) != 4 {
-		return 999
-	}
-
-	last, err := strconv.Atoi(parts[3])
-	if err != nil {
-		return 999
-	}
-
-	return last
-}
-
-
 func ifaceIsValidNetmask(mask string) bool {
-	parts := strings.Split(strings.TrimSpace(mask), ".")
-	if len(parts) != 4 {
+	value, ok := ifaceIPv4ToUint32(mask)
+	if !ok {
 		return false
-	}
-
-	var value uint32
-	for _, part := range parts {
-		n, err := strconv.Atoi(part)
-		if err != nil || n < 0 || n > 255 {
-			return false
-		}
-		value = (value << 8) | uint32(n)
 	}
 
 	// Reject /0 and /32 for LAN-style editable interfaces.
@@ -1248,6 +1374,112 @@ func ifaceIsValidNetmask(mask string) bool {
 	}
 
 	return true
+}
+
+// ifaceNetmaskSupportsRequiredAddresses ensures that changing the user-facing
+// LAN netmask cannot separate or reserve any address needed by the integrated
+// device. Keep the public error generic: implementation topology is internal.
+func ifaceNetmaskSupportsRequiredAddresses(mask string) bool {
+	maskValue, ok := ifaceIPv4ToUint32(mask)
+	if !ok || !ifaceIsValidNetmask(mask) {
+		return false
+	}
+
+	acValue, ok := ifaceIPv4ToUint32(ACManagementIP)
+	if !ok {
+		return false
+	}
+
+	network := acValue & maskValue
+	broadcast := network | ^maskValue
+	requiredAddresses := append([]string{ACManagementIP}, APManagementIPs()...)
+
+	for _, address := range requiredAddresses {
+		value, valid := ifaceIPv4ToUint32(address)
+		if !valid || value&maskValue != network || value == network || value == broadcast {
+			return false
+		}
+	}
+
+	return true
+}
+
+func ifaceValidateLanDHCPPool(netmask string, req *InterfaceDHCPReq) error {
+	if req == nil {
+		return nil
+	}
+
+	start := strings.TrimSpace(req.Start)
+	limit := strings.TrimSpace(req.Limit)
+	leasetime := strings.TrimSpace(req.LeaseTime)
+	if start == "" || limit == "" || leasetime == "" {
+		return fmt.Errorf("dhcp start, limit and lease time are required")
+	}
+
+	startNum, err := strconv.ParseUint(start, 10, 32)
+	if err != nil || startNum > 65535 {
+		return fmt.Errorf("invalid dhcp start")
+	}
+	if startNum < 100 {
+		return errIfaceDHCPStartTooLow
+	}
+
+	limitNum, err := strconv.ParseUint(limit, 10, 32)
+	if err != nil || limitNum < 1 || limitNum > 65535 {
+		return fmt.Errorf("invalid dhcp limit")
+	}
+
+	maskValue, ok := ifaceIPv4ToUint32(netmask)
+	if !ok || !ifaceIsValidNetmask(netmask) {
+		return fmt.Errorf("invalid netmask")
+	}
+
+	hostMask := uint64(^maskValue)
+	endOffset := startNum + limitNum - 1
+	// hostMask is the broadcast offset; the last usable host is one below it.
+	if hostMask < 2 || endOffset >= hostMask {
+		return errIfaceDHCPPoolIncompatible
+	}
+
+	acValue, ok := ifaceIPv4ToUint32(ACManagementIP)
+	if !ok {
+		return errIfaceDHCPPoolIncompatible
+	}
+	network := uint64(acValue & maskValue)
+	requiredAddresses := append([]string{ACManagementIP}, APManagementIPs()...)
+	for _, address := range requiredAddresses {
+		value, valid := ifaceIPv4ToUint32(address)
+		if !valid || uint64(value) < network {
+			return errIfaceDHCPPoolIncompatible
+		}
+		offset := uint64(value) - network
+		if startNum <= offset && offset <= endOffset {
+			return errIfaceDHCPPoolIncompatible
+		}
+	}
+
+	return nil
+}
+
+func ifaceIPv4ToUint32(ip string) (uint32, bool) {
+	parts := strings.Split(strings.TrimSpace(ip), ".")
+	if len(parts) != 4 {
+		return 0, false
+	}
+
+	var value uint32
+	for _, part := range parts {
+		if part == "" {
+			return 0, false
+		}
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 0 || n > 255 {
+			return 0, false
+		}
+		value = (value << 8) | uint32(n)
+	}
+
+	return value, true
 }
 
 // ---------- Value Helpers ----------

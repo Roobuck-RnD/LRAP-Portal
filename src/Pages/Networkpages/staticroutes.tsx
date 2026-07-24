@@ -2,8 +2,15 @@ import type { JSX } from 'react'
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useCurrentAllModuleStore } from '@/states/allModuleState'
 import { apiFetch } from '@/utils/http'
-import { Trash2, Plus, RefreshCw, Save, Route, Search } from 'lucide-react'
+import { Trash2, Plus, Save, Route } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { NativeSelect } from '@/components/ui/native-select'
+import { Table } from '@/components/ui/table'
+import { SearchField } from '@/components/data-table'
+import { PageHeader, PageShell, StatCard } from '@/components/page'
+import { getPageDataCache, setPageDataCache } from '@/utils/page-data-cache'
 
 import {
   AlertDialog,
@@ -59,8 +66,6 @@ const getErrorMessage = (error: unknown): string => {
   return String(error)
 }
 
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
-
 function normalizeRouteField(value: string): string {
   return value.trim()
 }
@@ -76,8 +81,33 @@ function isValidIPv4(value: string): boolean {
   })
 }
 
+const STATIC_ROUTES_CACHE_KEY = 'network.static-routes'
+
+function ipv4ToUint32(value: string): number {
+  return value
+    .trim()
+    .split('.')
+    .reduce((result, part) => ((result * 256) + Number(part)) >>> 0, 0)
+}
+
+function netmaskPrefixLength(value: string): number | null {
+  if (!isValidIPv4(value)) return null
+
+  const binary = value
+    .trim()
+    .split('.')
+    .map((part) => Number(part).toString(2).padStart(8, '0'))
+    .join('')
+
+  if (!/^1*0*$/.test(binary)) return null
+  return binary.indexOf('0') === -1 ? 32 : binary.indexOf('0')
+}
+
 export default function StaticRoutes(): JSX.Element {
   const { currentAllModule } = useCurrentAllModuleStore()
+  const [cachedAtMount] = useState<StaticRoute[] | undefined>(() =>
+    getPageDataCache<StaticRoute[]>(STATIC_ROUTES_CACHE_KEY)
+  )
 
   const acModule = useMemo<Module | undefined>(() => {
     return (
@@ -87,12 +117,11 @@ export default function StaticRoutes(): JSX.Element {
     )
   }, [currentAllModule])
 
-  const [routes, setRoutes] = useState<StaticRoute[]>([])
+  const [routes, setRoutes] = useState<StaticRoute[]>(() => cachedAtMount ?? [])
   const [form, setForm] = useState<NewRouteForm>(INITIAL_FORM)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
   const [search, setSearch] = useState('')
-  const [isProcessing, setIsProcessing] = useState(false)
 
   const [actionConfirm, setActionConfirm] = useState<{
     isOpen: boolean
@@ -113,7 +142,9 @@ export default function StaticRoutes(): JSX.Element {
     }
 
     const data = await res.json()
-    return Array.isArray(data) ? data : []
+    const list = Array.isArray(data) ? data : []
+    setPageDataCache(STATIC_ROUTES_CACHE_KEY, list)
+    return list
   }, [])
 
   const addRoute = useCallback(async (data: NewRouteForm) => {
@@ -155,7 +186,7 @@ export default function StaticRoutes(): JSX.Element {
 
   // ---------- Data Loading ----------
 
-  const loadRoutes = useCallback(async () => {
+  const loadRoutes = useCallback(async (isBackground = false) => {
     setLoading(true)
     setError(undefined)
 
@@ -165,15 +196,17 @@ export default function StaticRoutes(): JSX.Element {
     } catch (err: unknown) {
       const msg = getErrorMessage(err)
       setError(msg)
-      setRoutes([])
+      if (!isBackground) {
+        setRoutes([])
+      }
     } finally {
       setLoading(false)
     }
   }, [fetchRoutes])
 
   useEffect(() => {
-    void loadRoutes()
-  }, [loadRoutes])
+    void loadRoutes(cachedAtMount !== undefined)
+  }, [cachedAtMount, loadRoutes])
 
   // ---------- Derived ----------
 
@@ -210,6 +243,16 @@ export default function StaticRoutes(): JSX.Element {
     if (!isValidIPv4(form.target)) return 'Target must be a valid IPv4 address.'
     if (!isValidIPv4(form.netmask)) return 'Netmask must be a valid IPv4 address.'
 
+    if (netmaskPrefixLength(form.netmask) === null) {
+      return 'Netmask must contain contiguous bits.'
+    }
+
+    const target = ipv4ToUint32(form.target)
+    const netmask = ipv4ToUint32(form.netmask)
+    if (((target & netmask) >>> 0) !== target) {
+      return 'Target must be the network address for the selected netmask.'
+    }
+
     if (form.gateway.trim() && !isValidIPv4(form.gateway)) {
       return 'Gateway must be a valid IPv4 address.'
     }
@@ -242,7 +285,6 @@ export default function StaticRoutes(): JSX.Element {
     const { type, section } = actionConfirm
 
     setActionConfirm({ isOpen: false, type })
-    setIsProcessing(true)
     setLoading(true)
     setError(undefined)
 
@@ -251,38 +293,20 @@ export default function StaticRoutes(): JSX.Element {
         await addRoute(form)
         setForm(INITIAL_FORM)
 
-        toast.info('Applying Configuration', {
-          description: 'Static route saved. Reloading network...'
+        toast.info('Applying Route', {
+          description: 'Saving and activating the static route...'
         })
       } else {
         if (!section) throw new Error('Missing route section.')
 
         await deleteRoute(section)
 
-        toast.info('Applying Configuration', {
-          description: 'Static route deleted. Reloading network...'
+        toast.info('Applying Route', {
+          description: 'Removing the static route...'
         })
       }
 
-      await delay(2500)
-
-      let newRoutes: StaticRoute[] = []
-      let reconnected = false
-
-      for (let i = 0; i < 8; i++) {
-        try {
-          newRoutes = await fetchRoutes()
-          reconnected = true
-          break
-        } catch {
-          await delay(1500)
-        }
-      }
-
-      if (!reconnected) {
-        throw new Error('Network reload timeout. Please refresh later.')
-      }
-
+      const newRoutes = await fetchRoutes()
       setRoutes(newRoutes)
       setError(undefined)
 
@@ -293,64 +317,30 @@ export default function StaticRoutes(): JSX.Element {
       const msg = getErrorMessage(err)
       setError(msg)
 
-      if (msg.includes('timeout') || msg.includes('Failed to fetch')) {
-        toast.warning('Connection Lost', {
-          description: 'Configuration may have applied, but the connection was temporarily lost.'
-        })
-      } else {
-        toast.error('Operation Failed', {
-          description: msg
-        })
-      }
+      toast.error('Operation Failed', {
+        description: msg
+      })
     } finally {
       setLoading(false)
-      setIsProcessing(false)
     }
   }
 
   return (
-    <div className="relative p-6">
-      <div className="mx-auto max-w-6xl">
-        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-3xl font-bold text-foreground">Static IPv4 Routes</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Configure persistent routing rules.
-            </p>
-          </div>
-        </div>
+    <PageShell className="relative">
+      <PageHeader title="Static IPv4 Routes" description="Configure persistent routing rules." />
 
         <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <div className="rounded-xl border bg-card p-4 shadow-sm">
-            <div className="text-sm text-muted-foreground">DHCP / Gateway Device</div>
-            <div className="mt-2 text-xl font-bold text-foreground">
-              {acModule?.name || 'Router'}
-            </div>
-            <div className="mt-1 font-mono text-xs text-muted-foreground">
-              {acModule?.ipaddress || ''}
-            </div>
-          </div>
-
-          <div className="rounded-xl border bg-card p-4 shadow-sm">
-            <div className="text-sm text-muted-foreground">Total Routes</div>
-            <div className="mt-2 text-3xl font-bold text-foreground">{routes.length}</div>
-          </div>
-
-          <div className="rounded-xl border bg-card p-4 shadow-sm">
-            <div className="text-sm text-muted-foreground">Filtered Results</div>
-            <div className="mt-2 text-3xl font-bold text-foreground">{filteredRoutes.length}</div>
-          </div>
+          <StatCard label="DHCP / Gateway Device" value={acModule?.name || 'Router'} detail={acModule?.ipaddress || ''} />
+          <StatCard label="Total Routes" value={routes.length} />
+          <StatCard label="Filtered Results" value={filteredRoutes.length} />
         </div>
 
-        <div className="mb-6 flex items-center gap-2 rounded-xl border bg-card px-3 py-2 shadow-sm">
-          <Search className="h-4 w-4 text-muted-foreground" />
-          <input
+        <SearchField
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search interface, target, netmask, gateway, metric..."
-            className="w-full border-0 bg-transparent text-sm outline-none"
-          />
-        </div>
+            className="sm:w-full"
+        />
 
         <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
@@ -378,7 +368,7 @@ export default function StaticRoutes(): JSX.Element {
             )}
 
             <div className="mb-6 overflow-x-auto rounded border border-border">
-              <table className="min-w-full text-left text-xs">
+              <Table className="min-w-full text-left text-xs">
                 <thead className="border-b border-border text-muted-foreground">
                   <tr>
                     <th className="px-3 py-2 font-medium">Interface</th>
@@ -415,11 +405,11 @@ export default function StaticRoutes(): JSX.Element {
                         </td>
                         <td className="px-3 py-2 text-right">
                           <Button
-                            variant="outline"
-                            size="sm"
+                            variant="destructiveOutline"
+                            size="icon"
                             onClick={() => triggerDelete(route.section)}
-                            className="border-destructive/30 text-destructive hover:bg-destructive/10"
                             title="Delete Route"
+                            aria-label="Delete route"
                             disabled={loading}
                           >
                             <Trash2 size={14} />
@@ -429,7 +419,7 @@ export default function StaticRoutes(): JSX.Element {
                     ))
                   )}
                 </tbody>
-              </table>
+              </Table>
             </div>
 
             <div className="rounded-lg border border-border bg-muted/40 p-4">
@@ -440,56 +430,56 @@ export default function StaticRoutes(): JSX.Element {
 
               <div className="mb-3 grid grid-cols-12 gap-2">
                 <div className="col-span-4 sm:col-span-2">
-                  <label className="mb-0.5 block text-[10px] text-muted-foreground">Interface</label>
-                  <select
-                    className="w-full rounded border-border px-1 py-1 text-xs focus:border-ring focus:ring-ring"
+                  <Label className="mb-1 block text-xs">Interface</Label>
+                  <NativeSelect
+                    className="h-8 text-xs"
                     value={form.interface}
                     onChange={(e) => handleFormChange('interface', e.target.value)}
                   >
                     <option value="lan">lan</option>
                     <option value="wan">wan</option>
                     <option value="vpn">vpn</option>
-                  </select>
+                  </NativeSelect>
                 </div>
 
                 <div className="col-span-8 sm:col-span-3">
-                  <label className="mb-0.5 block text-[10px] text-muted-foreground">Target IP</label>
-                  <input
+                  <Label className="mb-1 block text-xs">Target IP</Label>
+                  <Input
                     type="text"
                     placeholder="192.168.50.0"
-                    className="w-full rounded border-border px-2 py-1 text-xs focus:border-ring focus:ring-ring"
+                    className="h-8 text-xs"
                     value={form.target}
                     onChange={(e) => handleFormChange('target', e.target.value)}
                   />
                 </div>
 
                 <div className="col-span-4 sm:col-span-3">
-                  <label className="mb-0.5 block text-[10px] text-muted-foreground">Netmask</label>
-                  <input
+                  <Label className="mb-1 block text-xs">Netmask</Label>
+                  <Input
                     type="text"
                     placeholder="255.255.255.0"
-                    className="w-full rounded border-border px-2 py-1 text-xs focus:border-ring focus:ring-ring"
+                    className="h-8 text-xs"
                     value={form.netmask}
                     onChange={(e) => handleFormChange('netmask', e.target.value)}
                   />
                 </div>
 
                 <div className="col-span-5 sm:col-span-3">
-                  <label className="mb-0.5 block text-[10px] text-muted-foreground">Gateway</label>
-                  <input
+                  <Label className="mb-1 block text-xs">Gateway</Label>
+                  <Input
                     type="text"
-                    className="w-full rounded border-border px-2 py-1 text-xs focus:border-ring focus:ring-ring"
+                    className="h-8 text-xs"
                     value={form.gateway}
                     onChange={(e) => handleFormChange('gateway', e.target.value)}
                   />
                 </div>
 
                 <div className="col-span-3 sm:col-span-1">
-                  <label className="mb-0.5 block text-[10px] text-muted-foreground">Metric</label>
-                  <input
+                  <Label className="mb-1 block text-xs">Metric</Label>
+                  <Input
                     type="number"
                     min={0}
-                    className="w-full rounded border-border px-1 py-1 text-xs focus:border-ring focus:ring-ring"
+                    className="h-8 text-xs"
                     value={form.metric}
                     onChange={(e) => handleFormChange('metric', e.target.value)}
                   />
@@ -505,8 +495,6 @@ export default function StaticRoutes(): JSX.Element {
             </div>
           </div>
         </div>
-      </div>
-
       <AlertDialog
         open={actionConfirm.isOpen}
         onOpenChange={(open) => {
@@ -521,38 +509,26 @@ export default function StaticRoutes(): JSX.Element {
 
             <AlertDialogDescription>
               {actionConfirm.type === 'add'
-                ? 'This will apply the static route. The network service will reload briefly.'
-                : 'Are you sure you want to remove this static route? The network service will reload briefly.'}
+                ? form.target.trim() === '0.0.0.0' && form.netmask.trim() === '0.0.0.0'
+                  ? 'This changes the default route immediately and may affect internet access. Network interfaces will not restart.'
+                  : 'This route will be saved and activated immediately without restarting network interfaces.'
+                : 'The selected route will be removed immediately without restarting network interfaces.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
 
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
+              variant={actionConfirm.type === 'delete' ? 'destructive' : 'default'}
               onClick={() => {
                 void executeAction()
               }}
-              className={actionConfirm.type === 'delete' ? 'bg-destructive hover:bg-destructive/90' : ''}
             >
               Continue
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
-      {isProcessing && (
-        <div className="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-black/40 backdrop-blur-sm transition-opacity">
-          <div className="flex flex-col items-center rounded-2xl bg-card px-8 py-10 shadow-2xl">
-            <RefreshCw className="mb-6 h-12 w-12 animate-spin text-primary" />
-            <h3 className="text-xl font-bold text-foreground">Applying Configuration</h3>
-            <p className="mt-3 text-center text-sm leading-relaxed text-muted-foreground">
-              Reloading network service.
-              <br />
-              Please wait while we reconnect...
-            </p>
-          </div>
-        </div>
-      )}
-    </div>
+    </PageShell>
   )
 }

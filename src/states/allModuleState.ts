@@ -3,6 +3,7 @@ import { create } from 'zustand'
 type ModuleType = 'Main Module' | 'Sub Module' | 'Unknown'
 
 type Module = {
+  module_id?: string
   name: string
   ipaddress: string
   mac: string

@@ -3,12 +3,26 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os/exec"
 	"strings"
 	"sync"
 	"time"
 )
+
+const (
+	rebootDispatchGrace      = 3 * time.Second
+	rebootRemoteDelaySeconds = 5
+	rebootLocalDelay         = 4 * time.Second
+	rebootEstimatedSeconds   = 90
+	rebootLockTimeout        = 3 * time.Minute
+)
+
+var rebootState = struct {
+	sync.Mutex
+	active bool
+}{}
 
 // ---------- Types ----------
 
@@ -19,13 +33,21 @@ type RebootAllResponse struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
+type RebootAcceptedResponse struct {
+	Status           string `json:"status"`
+	Message          string `json:"message"`
+	EstimatedSeconds int    `json:"estimated_seconds"`
+}
+
 // ---------- Reboot Logic ----------
 
 func rebootLocalDelayed(delay time.Duration) {
 	go func() {
 		time.Sleep(delay)
 		fmt.Println("[System] Rebooting local AC system...")
-		_ = exec.Command("reboot").Run()
+		if err := exec.Command("reboot").Run(); err != nil {
+			log.Printf("local AC reboot command failed: %v", err)
+		}
 	}()
 }
 
@@ -34,9 +56,9 @@ func rebootRemoteAP(ip string) error {
 		return fmt.Errorf("empty target ip")
 	}
 
-
-	// Use background shell so ubus file.exec can return before reboot interrupts RPC.
-	cmdStr := "(sleep 2; reboot) >/dev/null 2>&1 &"
+	// Keep the AP alive long enough for the accepted response and reboot screen
+	// to reach a browser whose current network path crosses this AP.
+	cmdStr := fmt.Sprintf("(sleep %d; reboot) >/dev/null 2>&1 &", rebootRemoteDelaySeconds)
 
 	_, err := ubusCallJSONAt(ip, AnonSID, "file", "exec", map[string]any{
 		"command": "sh",
@@ -85,7 +107,7 @@ func rebootAllModules() RebootAllResponse {
 	// Reboot AC after HTTP response has time to reach frontend.
 	targets = append(targets, "AC")
 
-	rebootLocalDelayed(4 * time.Second)
+	rebootLocalDelayed(rebootLocalDelay)
 
 	return RebootAllResponse{
 		Status:   "ok",
@@ -93,6 +115,37 @@ func rebootAllModules() RebootAllResponse {
 		Targets:  targets,
 		Warnings: warnings,
 	}
+}
+
+func beginRebootAllModules() bool {
+	rebootState.Lock()
+	if rebootState.active {
+		rebootState.Unlock()
+		return false
+	}
+	rebootState.active = true
+	rebootState.Unlock()
+
+	// The process normally exits during this sequence. If the reboot command is
+	// rejected by the OS, release the guard later so an administrator can retry.
+	time.AfterFunc(rebootLockTimeout, func() {
+		rebootState.Lock()
+		rebootState.active = false
+		rebootState.Unlock()
+	})
+
+	go func() {
+		// systemRebootHandler returns 202 before this grace period expires.
+		time.Sleep(rebootDispatchGrace)
+
+		result := rebootAllModules()
+		if len(result.Warnings) > 0 {
+			log.Printf("reboot sequence warnings: %s", strings.Join(result.Warnings, "; "))
+		}
+		log.Printf("reboot sequence dispatched to %d target(s)", len(result.Targets))
+	}()
+
+	return true
 }
 
 // ---------- Handler ----------
@@ -111,8 +164,15 @@ func systemRebootHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := rebootAllModules()
+	if !beginRebootAllModules() {
+		http.Error(w, `{"error":"reboot already in progress"}`, http.StatusConflict)
+		return
+	}
 
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(result)
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(RebootAcceptedResponse{
+		Status:           "accepted",
+		Message:          "Reboot accepted. The router will restart shortly.",
+		EstimatedSeconds: rebootEstimatedSeconds,
+	})
 }

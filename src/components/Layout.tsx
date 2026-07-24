@@ -9,6 +9,7 @@ import { Separator } from '@/components/ui/separator'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
 import { AppSidebar } from './app-sidebar'
 import { Outlet, useLocation } from 'react-router'
+import { ThemeToggle } from './theme-toggle'
 
 // 面包屑从当前路由(URL)派生,而不是从内存 store 读。之前读的 zustand
 // (currentTab/currentTabGroup)没有持久化,刷新后会重置成默认值(Status /
@@ -63,8 +64,8 @@ export default function Layout() {
     <SidebarProvider>
       <AppSidebar />
       <SidebarInset>
-        <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-[[data-collapsible=icon]]/sidebar-wrapper:h-12">
-          <div className="flex items-center gap-2 px-4">
+        <header className="flex h-16 shrink-0 items-center gap-2 border-b border-border/50 bg-background/85 px-4 backdrop-blur-md transition-[width,height] ease-linear group-has-[[data-collapsible=icon]]/sidebar-wrapper:h-12">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
             <SidebarTrigger className="-ml-1" />
             <Separator orientation="vertical" className="mr-2 h-4" />
             <Breadcrumb>
@@ -79,8 +80,9 @@ export default function Layout() {
               </BreadcrumbList>
             </Breadcrumb>
           </div>
+          <ThemeToggle />
         </header>
-        <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
+        <div className="flex flex-1 flex-col gap-4 p-4">
           <Outlet />
         </div>
       </SidebarInset>

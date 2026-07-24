@@ -31,51 +31,54 @@ import Login from './Pages/Loginpages/Login'
 import Layout from './components/Layout'
 import { Toaster } from './components/ui/sonner'
 import { ConfirmHost } from './components/ui/confirm'
+import { RoutedThemeProvider } from './components/theme-provider'
 
 function App() {
   return (
     <HashRouter>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route
-          path="/"
-          element={
-            <ProtectedRoute>
-              <Layout />
-            </ProtectedRoute>
-          }
-        >
-          <Route path="/" element={<Overview />} />
-          <Route path="firewallstatus" element={<FirewallStatus />} />
-          <Route path="routesstatus" element={<RoutesStatus />} />
-          <Route path="connectedClients" element={<ConnectedClients />} />
-          <Route path="systemlog" element={<SystemLog />} />
-          <Route path="kernellog" element={<KernelLog />} />
-          <Route path="processes" element={<Processes />} />
-          <Route path="realtimegraphs" element={<RealtimeGraphs />} />
-          <Route path="system" element={<System />} />
-          <Route path="administration" element={<Administration />} />
-          <Route path="software" element={<Software />} />
-          <Route path="startup" element={<Startup />} />
-          <Route path="scheduledtasks" element={<ScheduledTasks />} />
-          <Route path="mountpoints" element={<MountPoints />} />
-          <Route path="ledconfiguration" element={<LEDConfiguration />} />
-          <Route path="flashfirmware" element={<FlashFirmware />} />
-          <Route path="reboot" element={<Reboot />} />
-          <Route path="networkshares" element={<NetworkShares />} />
-          <Route path="interfaces" element={<Interfaces />} />
-          <Route path="DHCPandDNS" element={<DHCPandDNS />} />
-          <Route path="hostnames" element={<Hostnames />} />
-          <Route path="staticroutes" element={<StaticRoutes />} />
-          <Route path="firewall" element={<Firewall />} />
-          <Route path="diagnostics" element={<Diagnostics />} />
-          <Route path="ipsecurity" element={<IPSecurity />} />
-          <Route path="wificonfiguration" element={<WiFiConfiguration />} />
-          <Route path="easymesh" element={<EasyMesh />} />
-        </Route>
-      </Routes>
-      <Toaster position="top-right" richColors />
-      <ConfirmHost />
+      <RoutedThemeProvider>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route
+            path="/"
+            element={
+              <ProtectedRoute>
+                <Layout />
+              </ProtectedRoute>
+            }
+          >
+            <Route path="/" element={<Overview />} />
+            <Route path="firewallstatus" element={<FirewallStatus />} />
+            <Route path="routesstatus" element={<RoutesStatus />} />
+            <Route path="connectedClients" element={<ConnectedClients />} />
+            <Route path="systemlog" element={<SystemLog />} />
+            <Route path="kernellog" element={<KernelLog />} />
+            <Route path="processes" element={<Processes />} />
+            <Route path="realtimegraphs" element={<RealtimeGraphs />} />
+            <Route path="system" element={<System />} />
+            <Route path="administration" element={<Administration />} />
+            <Route path="software" element={<Software />} />
+            <Route path="startup" element={<Startup />} />
+            <Route path="scheduledtasks" element={<ScheduledTasks />} />
+            <Route path="mountpoints" element={<MountPoints />} />
+            <Route path="ledconfiguration" element={<LEDConfiguration />} />
+            <Route path="flashfirmware" element={<FlashFirmware />} />
+            <Route path="reboot" element={<Reboot />} />
+            <Route path="networkshares" element={<NetworkShares />} />
+            <Route path="interfaces" element={<Interfaces />} />
+            <Route path="DHCPandDNS" element={<DHCPandDNS />} />
+            <Route path="hostnames" element={<Hostnames />} />
+            <Route path="staticroutes" element={<StaticRoutes />} />
+            <Route path="firewall" element={<Firewall />} />
+            <Route path="diagnostics" element={<Diagnostics />} />
+            <Route path="ipsecurity" element={<IPSecurity />} />
+            <Route path="wificonfiguration" element={<WiFiConfiguration />} />
+            <Route path="easymesh" element={<EasyMesh />} />
+          </Route>
+        </Routes>
+        <Toaster position="top-right" richColors />
+        <ConfirmHost />
+      </RoutedThemeProvider>
     </HashRouter>
   )
 }

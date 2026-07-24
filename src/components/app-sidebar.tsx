@@ -19,8 +19,10 @@ import {
 import { type Module } from '@/states/moduleState'
 import { useCurrentAllModuleStore } from '@/states/allModuleState'
 import { apiFetch } from '@/utils/http'
+import { compareManagedModules } from '@/lib/module-order'
 
 type LanClient = {
+  module_id?: string
   port: string
   mac: string
   ip: string
@@ -78,16 +80,21 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { updateCurrentAllModule } = useCurrentAllModuleStore()
 
   useEffect(() => {
-    let timer: number | null = null
+    let cancelled = false
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
 
     const fetchModules = async () => {
       try {
         const res = await apiFetch('/api/lan/clients')
         if (!res.ok) {
           console.error('Failed to load modules:', res.status, await res.text())
+          if (!cancelled) {
+            retryTimer = setTimeout(() => void fetchModules(), 3000)
+          }
           return
         }
         const arr: LanClient[] = await res.json()
+        if (cancelled) return
 
         // 映射到你的 Module 结构
         const parsed: Module[] = arr.map((item) => {
@@ -98,6 +105,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             item.hostname && item.hostname !== '?' && item.hostname !== '(unknown)'
 
           return {
+            module_id: item.module_id,
             name: hasValidHostname ? item.hostname : fallbackName,
             ipaddress: item.ip || '(unknown)',
             mac: item.mac,
@@ -107,28 +115,45 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           }
         })
 
-        // 主模块放在第一位（Go 已经这么做了，这里再兜底一下）
-        parsed.sort((a, b) =>
-          a.type === 'Main Module'
-            ? -1
-            : b.type === 'Main Module'
-              ? 1
-              : a.ipaddress.localeCompare(b.ipaddress)
-        )
+        // Stable product order: Router, then Antenna1/lan1 through
+        // Antenna4/lan4. Management IP is only a last-resort fallback.
+        parsed.sort(compareManagedModules)
 
+        const expectedModuleCount = Number(sessionStorage.getItem('wifiExpectedModuleCount'))
+        const recoveryDeadline = Number(sessionStorage.getItem('wifiModuleRecoveryDeadline'))
+        const waitingForRecoveredModules =
+          Number.isFinite(expectedModuleCount) &&
+          expectedModuleCount > 1 &&
+          parsed.length < expectedModuleCount &&
+          Number.isFinite(recoveryDeadline) &&
+          Date.now() < recoveryDeadline
+
+        if (waitingForRecoveredModules) {
+          console.warn(
+            `Module discovery is still recovering: ${parsed.length}/${expectedModuleCount}`
+          )
+          retryTimer = setTimeout(() => void fetchModules(), 3000)
+          return
+        }
+
+        sessionStorage.removeItem('wifiExpectedModuleCount')
+        sessionStorage.removeItem('wifiModuleRecoveryDeadline')
         updateCurrentAllModule(parsed)
       } catch (e) {
         console.error('Failed to load modules:', e)
+        if (!cancelled) {
+          retryTimer = setTimeout(() => void fetchModules(), 3000)
+        }
       }
     }
 
-    // 先拉一次
-    fetchModules()
-    // 轮询建议别太频繁（1s 太凶了，容易把 CPU/日志打爆）；5s 比较稳妥
-    timer = window.setInterval(fetchModules, 5000)
+    // Retry module discovery while the management network is still recovering
+    // after a WiFi reload. Live status pages own background polling afterwards.
+    void fetchModules()
 
     return () => {
-      if (timer) window.clearInterval(timer)
+      cancelled = true
+      if (retryTimer) clearTimeout(retryTimer)
     }
   }, [updateCurrentAllModule])
 

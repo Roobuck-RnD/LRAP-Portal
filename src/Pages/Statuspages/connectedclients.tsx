@@ -2,15 +2,17 @@ import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch } from '@/utils/http'
 import useDevModeStore from '@/states/devModeState'
-import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { SearchField } from '@/components/data-table'
+import { PageHeader, PageShell, StatCard } from '@/components/page'
+import { getPageDataCache, setPageDataCache } from '@/utils/page-data-cache'
+import { Table } from '@/components/ui/table'
+import { compareManagedModules } from '@/lib/module-order'
 import {
   Wifi,
   Router,
-  Smartphone,
   Monitor,
   AlertCircle,
-  Search
 } from 'lucide-react'
 
 // ---------- Types ----------
@@ -29,8 +31,10 @@ type ConnectedClient = {
 }
 
 type ClientModule = {
+  module_id?: string
   name: string
   type: ModuleType
+  port?: string
   ip?: string
   mac?: string
   br_lan_mac?: string
@@ -42,6 +46,16 @@ type ClientModule = {
 
 type ConnectedClientsResponse = {
   modules: ClientModule[]
+  collection_complete?: boolean
+  expected_antenna_count?: number
+  online_antenna_count?: number
+}
+
+type ConnectedClientsCache = {
+  modules: ClientModule[]
+  collectionComplete: boolean
+  expectedAntennaCount: number
+  onlineAntennaCount: number
 }
 
 type FlatClient = ConnectedClient & {
@@ -51,6 +65,7 @@ type FlatClient = ConnectedClient & {
 }
 
 const CLIENTS_ENDPOINT = '/api/status/connected-clients'
+const CONNECTED_CLIENTS_CACHE_KEY = 'status.connected-clients.v2'
 
 function normalizeMac(mac?: string): string {
   return (mac || '').toUpperCase()
@@ -95,8 +110,10 @@ function bandBadgeClass(band?: string): string {
 function stableStringifyModules(modules: ClientModule[]): string {
   return JSON.stringify(
     modules.map((mod) => ({
+      module_id: mod.module_id || '',
       name: mod.name,
       type: mod.type,
+      port: mod.port || '',
       ip: mod.ip || '',
       mac: mod.mac || '',
       br_lan_mac: mod.br_lan_mac || '',
@@ -120,15 +137,30 @@ function stableStringifyModules(modules: ClientModule[]): string {
 
 function ConnectedClients(): JSX.Element {
   const { devMode } = useDevModeStore()
+  const [cachedAtMount] = useState<ConnectedClientsCache | undefined>(() =>
+    getPageDataCache<ConnectedClientsCache>(CONNECTED_CLIENTS_CACHE_KEY)
+  )
 
-  const [modules, setModules] = useState<ClientModule[]>([])
-  const [initialLoading, setInitialLoading] = useState(true)
+  const [modules, setModules] = useState<ClientModule[]>(() => cachedAtMount?.modules ?? [])
+  const [collectionComplete, setCollectionComplete] = useState(
+    () => cachedAtMount?.collectionComplete ?? false
+  )
+  const [expectedAntennaCount, setExpectedAntennaCount] = useState(
+    () => cachedAtMount?.expectedAntennaCount ?? 0
+  )
+  const [onlineAntennaCount, setOnlineAntennaCount] = useState(
+    () => cachedAtMount?.onlineAntennaCount ?? 0
+  )
+  const [initialLoading, setInitialLoading] = useState(() => cachedAtMount === undefined)
   const [, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
 
-  const modulesSnapshotRef = useRef<string>('')
-  const hasLoadedOnceRef = useRef(false)
+  const modulesSnapshotRef = useRef<string>(
+    cachedAtMount ? stableStringifyModules(cachedAtMount.modules) : ''
+  )
+  const hasLoadedOnceRef = useRef(cachedAtMount !== undefined)
+  const hasCompleteSnapshotRef = useRef(cachedAtMount?.collectionComplete ?? false)
   const inFlightRef = useRef(false)
 
   const fetchClients = useCallback(async (mode: 'initial' | 'background' | 'manual' = 'background') => {
@@ -155,8 +187,42 @@ function ConnectedClients(): JSX.Element {
       }
 
       const data = (await res.json()) as ConnectedClientsResponse
-      const nextModules = Array.isArray(data.modules) ? data.modules : []
+      const nextModules = Array.isArray(data.modules)
+        ? [...data.modules].sort(compareManagedModules)
+        : []
+      const nextCollectionComplete = data.collection_complete !== false
+      const nextExpectedAntennaCount =
+        typeof data.expected_antenna_count === 'number'
+          ? data.expected_antenna_count
+          : nextModules.filter((mod) => mod.type === 'ap').length
+      const nextOnlineAntennaCount =
+        typeof data.online_antenna_count === 'number'
+          ? data.online_antenna_count
+          : nextModules.filter((mod) => mod.type === 'ap' && mod.online !== false).length
       const nextSnapshot = stableStringifyModules(nextModules)
+
+      setCollectionComplete(nextCollectionComplete)
+      setExpectedAntennaCount(nextExpectedAntennaCount)
+      setOnlineAntennaCount(nextOnlineAntennaCount)
+
+      // A partial AP collection is not a genuine zero-client snapshot. Keep the
+      // last complete data visible while polling recovers instead of replacing
+      // it with Router-only/zero data.
+      if (!nextCollectionComplete && hasCompleteSnapshotRef.current) {
+        setError(null)
+        hasLoadedOnceRef.current = true
+        return
+      }
+
+      if (nextCollectionComplete) {
+        hasCompleteSnapshotRef.current = true
+        setPageDataCache(CONNECTED_CLIENTS_CACHE_KEY, {
+          modules: nextModules,
+          collectionComplete: true,
+          expectedAntennaCount: nextExpectedAntennaCount,
+          onlineAntennaCount: nextOnlineAntennaCount
+        })
+      }
 
       if (nextSnapshot !== modulesSnapshotRef.current) {
         modulesSnapshotRef.current = nextSnapshot
@@ -176,16 +242,21 @@ function ConnectedClients(): JSX.Element {
   }, [])
 
   useEffect(() => {
-    void fetchClients('initial')
+    void fetchClients(cachedAtMount === undefined ? 'initial' : 'background')
 
-    const timer = window.setInterval(() => {
+    const refreshWhenVisible = () => {
+      if (document.visibilityState !== 'visible') return
       void fetchClients('background')
-    }, 5000)
+    }
+
+    const timer = window.setInterval(refreshWhenVisible, 5000)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
 
     return () => {
       window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
     }
-  }, [fetchClients])
+  }, [cachedAtMount, fetchClients])
 
   const flatClients = useMemo<FlatClient[]>(() => {
     return modules.flatMap((mod) =>
@@ -250,12 +321,8 @@ function ConnectedClients(): JSX.Element {
   }
 
   return (
-    <div className="w-full p-6">
-      <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-        <div>
-          <h2 className="text-3xl font-bold text-foreground">Connected Clients</h2>
-        </div>
-      </div>
+    <PageShell size="full">
+      <PageHeader title="Connected Clients" description="Devices currently connected to the router and managed antennas." />
 
       {error && (
         <div className="mb-6 flex gap-2 rounded border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
@@ -264,57 +331,32 @@ function ConnectedClients(): JSX.Element {
         </div>
       )}
 
+      {!collectionComplete && (
+        <div className="mb-6 flex gap-2 rounded border border-warning/25 bg-warning/10 p-3 text-sm text-warning">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            Client data is recovering ({onlineAntennaCount}/{expectedAntennaCount} antennas
+            available). The page will update automatically.
+          </span>
+        </div>
+      )}
+
       <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Total Clients</CardDescription>
-            <CardTitle className="flex items-center gap-2 text-3xl">
-              <Smartphone className="h-6 w-6 text-primary" />
-              {totalClients}
-            </CardTitle>
-          </CardHeader>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Router Clients</CardDescription>
-            <CardTitle className="flex items-center gap-2 text-3xl">
-              <Router className="h-6 w-6 text-foreground" />
-              {acClients}
-            </CardTitle>
-          </CardHeader>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Antenna Clients</CardDescription>
-            <CardTitle className="flex items-center gap-2 text-3xl">
-              <Wifi className="h-6 w-6 text-signal" />
-              {apClients}
-            </CardTitle>
-          </CardHeader>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Antenna Number</CardDescription>
-            <CardTitle className="flex items-center gap-2 text-3xl">
-              <Wifi className="h-6 w-6 text-primary" />
-              {apCount}
-            </CardTitle>
-          </CardHeader>
-        </Card>
+        <StatCard label="Total Clients" value={collectionComplete ? totalClients : '—'} />
+        <StatCard label="Router Clients" value={collectionComplete ? acClients : '—'} />
+        <StatCard label="Antenna Clients" value={collectionComplete ? apClients : '—'} />
+        <StatCard
+          label="Antenna Number"
+          value={collectionComplete ? apCount : `${onlineAntennaCount}/${expectedAntennaCount}`}
+        />
       </div>
 
-      <div className="mb-6 flex items-center gap-2 rounded-xl border bg-card px-3 py-2 shadow-sm">
-        <Search className="h-4 w-4 text-muted-foreground" />
-        <Input
+      <SearchField
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search by hostname, IP, MAC, SSID, or device name..."
-          className="border-0 shadow-none focus-visible:ring-0"
-        />
-      </div>
+          className="sm:w-full"
+      />
 
       <div className="mb-8">
         <h3 className="mb-3 text-lg font-semibold text-foreground">Devices</h3>
@@ -412,7 +454,15 @@ function ConnectedClients(): JSX.Element {
         </CardHeader>
 
         <CardContent>
-          {filteredClients.length === 0 ? (
+          {!collectionComplete && filteredClients.length === 0 ? (
+            <div className="rounded-lg border border-dashed p-8 text-center">
+              <Monitor className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+              <div className="text-sm font-medium text-foreground">Client data is recovering</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                Waiting for all managed antennas to answer.
+              </div>
+            </div>
+          ) : filteredClients.length === 0 ? (
             <div className="rounded-lg border border-dashed p-8 text-center">
               <Monitor className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
               <div className="text-sm font-medium text-foreground">No connected clients found</div>
@@ -422,7 +472,7 @@ function ConnectedClients(): JSX.Element {
             </div>
           ) : (
             <div className="overflow-auto">
-              <table className="min-w-full text-sm">
+              <Table className="min-w-full text-sm">
                 <thead className="border-b border-border text-xs text-muted-foreground">
                   <tr>
                     <th className="px-3 py-2 text-left">Client</th>
@@ -488,12 +538,12 @@ function ConnectedClients(): JSX.Element {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </Table>
             </div>
           )}
         </CardContent>
       </Card>
-    </div>
+    </PageShell>
   )
 }
 

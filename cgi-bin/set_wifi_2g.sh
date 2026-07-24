@@ -16,7 +16,7 @@ modify_wifi_config() {
   local path="$1"
   [ -n "$ssid" ] && sed -i "s/^SSID1=.*/SSID1=$ssid/" "$path"
   [ -n "$password" ] && sed -i "s/^WPAPSK1=.*/WPAPSK1=$password/" "$path"
-  (sleep 1; wifi reload >/dev/null 2>&1 || /etc/init.d/network restart >/dev/null 2>&1) &
+  (sleep 1; wifi reload >/dev/null 2>&1) &
   echo '{"success": true}'
 }
 
@@ -32,7 +32,7 @@ bat_path="/etc/wireless/mediatek/mt7981.dbdc.b0.dat"
 [ -n "\$ssid" ] && sed -i "s/^SSID1=.*/SSID1=\$ssid/" "\$bat_path"
 [ -n "\$password" ] && sed -i "s/^WPAPSK1=.*/WPAPSK1=\$password/" "\$bat_path"
 
-(sleep 1; wifi reload >/dev/null 2>&1 || /etc/init.d/network restart >/dev/null 2>&1) &
+(sleep 1; wifi reload >/dev/null 2>&1) &
 
 echo '{"success": true}'
 EOF

@@ -46,8 +46,10 @@ type ConnectedClient struct {
 }
 
 type ConnectedClientModule struct {
+	ModuleID string            `json:"module_id"`
 	Name     string            `json:"name"`
 	Type     string            `json:"type"` // main / ap
+	Port     string            `json:"port,omitempty"`
 	IP       string            `json:"ip,omitempty"`
 	MAC      string            `json:"mac,omitempty"` // 兼容旧前端，等于 br-lan MAC
 	BrLanMAC string            `json:"br_lan_mac,omitempty"`
@@ -58,7 +60,10 @@ type ConnectedClientModule struct {
 }
 
 type ConnectedClientsResponse struct {
-	Modules []ConnectedClientModule `json:"modules"`
+	Modules              []ConnectedClientModule `json:"modules"`
+	CollectionComplete   bool                    `json:"collection_complete"`
+	ExpectedAntennaCount int                     `json:"expected_antenna_count"`
+	OnlineAntennaCount   int                     `json:"online_antenna_count"`
 }
 
 // ---------- Internal Types ----------
@@ -138,6 +143,11 @@ func connectedClientsHandler(w http.ResponseWriter, r *http.Request) {
 	modules = append(modules, mainModule)
 	modules = append(modules, apModules...)
 
+	expectedAntennaCount := ccExpectedAntennaCount()
+	if expectedAntennaCount < len(apModules) {
+		expectedAntennaCount = len(apModules)
+	}
+
 	// A client MAC can briefly appear on more than one AP while roaming or when
 	// an AP still has stale station/FDB data. Only keep one confirmed row per MAC
 	// in the final online list. The best row is chosen by valid signal first, then
@@ -145,8 +155,27 @@ func connectedClientsHandler(w http.ResponseWriter, r *http.Request) {
 	ccDedupeClientsAcrossModules(modules)
 
 	_ = json.NewEncoder(w).Encode(ConnectedClientsResponse{
-		Modules: modules,
+		Modules:              modules,
+		CollectionComplete:   len(apModules) >= expectedAntennaCount,
+		ExpectedAntennaCount: expectedAntennaCount,
+		OnlineAntennaCount:   len(apModules),
 	})
+}
+
+// ccExpectedAntennaCount uses the physical AC LAN links as the expected module
+// count. In this product lan1-lan4 are dedicated Antenna uplinks, so a carrier
+// that is up but has no successfully queried AP means collection is recovering;
+// it must never be reported to the UI as a genuine zero-client result.
+func ccExpectedAntennaCount() int {
+	count := 0
+	for portIndex := 1; portIndex <= len(APManagementIPs()); portIndex++ {
+		carrierPath := fmt.Sprintf("/sys/class/net/lan%d/carrier", portIndex)
+		raw, err := os.ReadFile(carrierPath)
+		if err == nil && strings.TrimSpace(string(raw)) == "1" {
+			count++
+		}
+	}
+	return count
 }
 
 // ---------- Main Module ----------
@@ -178,8 +207,10 @@ func ccBuildMainModule(leases map[string]ccDhcpLease, arpByMAC map[string]ccArpE
 	moduleFDB := ccParseBridgeFDB()
 
 	mod := ConnectedClientModule{
+		ModuleID: managedMainModuleID,
 		Name:     name,
 		Type:     "main",
+		Port:     "br-lan",
 		IP:       ip,
 		MAC:      brLanMAC,
 		BrLanMAC: brLanMAC,
@@ -196,44 +227,47 @@ func ccBuildMainModule(leases map[string]ccDhcpLease, arpByMAC map[string]ccArpE
 // ---------- AP Modules ----------
 
 func ccBuildAPModules(leases map[string]ccDhcpLease, arpByMAC map[string]ccArpEntry) []ConnectedClientModule {
-	ips := APManagementIPs()
-	out := make([]ConnectedClientModule, 0, len(ips))
-
-	// 一次性解析 IP->物理口,给 AP 编号(只读,goroutine 里并发读安全)
-	portByIP := apPortIndexByIP()
+	registry := discoverManagedAPs(true)
+	out := make([]ConnectedClientModule, len(registry))
+	ready := make([]bool, len(registry))
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
-	for _, ip := range ips {
-		ip := ip
+	for index, managed := range registry {
+		index := index
+		managed := managed
 
 		wg.Add(1)
 
 		go func() {
 			defer wg.Done()
 
-			if !ccPingOnce(ip) {
+			if !ccPingOnce(managed.IP) {
 				return
 			}
 
-			mod := ccBuildSingleAPModule(ip, leases, arpByMAC)
-			// 显示名改为按物理口编号(RoobuckAP1..4),稳定不随 IP 变
-			mod.Name = apDisplayName(mod.Name, portByIP[ip])
+			mod := ccBuildSingleAPModule(managed.IP, leases, arpByMAC)
+			mod.ModuleID = managed.ModuleID
+			mod.Port = managed.Port
+			mod.Name = apDisplayName(mod.Name, managed.PortIndex)
 
 			mu.Lock()
-			out = append(out, mod)
+			out[index] = mod
+			ready[index] = true
 			mu.Unlock()
 		}()
 	}
 
 	wg.Wait()
 
-	sort.Slice(out, func(i, j int) bool {
-		return ccIPSortKey(out[i].IP) < ccIPSortKey(out[j].IP)
-	})
-
-	return out
+	ordered := make([]ConnectedClientModule, 0, len(out))
+	for index, module := range out {
+		if ready[index] {
+			ordered = append(ordered, module)
+		}
+	}
+	return ordered
 }
 
 func ccBuildSingleAPModule(ip string, leases map[string]ccDhcpLease, arpByMAC map[string]ccArpEntry) ConnectedClientModule {

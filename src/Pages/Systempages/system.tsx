@@ -4,6 +4,11 @@ import { toast } from 'sonner'
 import { useCurrentAllModuleStore } from '@/states/allModuleState'
 import { apiFetch } from '@/utils/http'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { NativeSelect } from '@/components/ui/native-select'
+import { PageHeader, PageShell, SectionCard } from '@/components/page'
+import { getPageDataCache, setPageDataCache } from '@/utils/page-data-cache'
 
 // ---------- Interfaces ----------
 
@@ -32,18 +37,29 @@ interface SaveResponse {
   warnings?: string[]
 }
 
+const SYSTEM_CONFIG_CACHE_KEY = 'system.general'
+const TIMEZONES_CACHE_KEY = 'system.timezones'
+const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
+  hostname: '',
+  timezone: 'UTC',
+  localtime: 'Loading...'
+}
+
 // ---------- Main Container ----------
 function SystemSettings(): JSX.Element {
   const { currentAllModule } = useCurrentAllModuleStore()
+  const [cachedConfigAtMount] = useState<SystemConfig | undefined>(() =>
+    getPageDataCache<SystemConfig>(SYSTEM_CONFIG_CACHE_KEY)
+  )
 
-  const [timezones, setTimezones] = useState<TimezoneOption[]>([])
-  const [config, setConfig] = useState<SystemConfig>({
-    hostname: '',
-    timezone: 'UTC',
-    localtime: 'Loading...'
-  })
+  const [timezones, setTimezones] = useState<TimezoneOption[]>(
+    () => getPageDataCache<TimezoneOption[]>(TIMEZONES_CACHE_KEY) ?? []
+  )
+  const [config, setConfig] = useState<SystemConfig>(
+    () => cachedConfigAtMount ?? DEFAULT_SYSTEM_CONFIG
+  )
 
-  const [firstLoad, setFirstLoad] = useState(true)
+  const [firstLoad, setFirstLoad] = useState(() => cachedConfigAtMount === undefined)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
@@ -74,6 +90,7 @@ function SystemSettings(): JSX.Element {
       }
 
       const data = (await res.json()) as SystemConfig
+      setPageDataCache(SYSTEM_CONFIG_CACHE_KEY, data)
       setConfig(data)
       setError(null)
     } catch (err: unknown) {
@@ -92,7 +109,9 @@ function SystemSettings(): JSX.Element {
 
       if (res.ok) {
         const list = (await res.json()) as TimezoneOption[]
-        setTimezones(Array.isArray(list) ? list : [])
+        const normalizedList = Array.isArray(list) ? list : []
+        setPageDataCache(TIMEZONES_CACHE_KEY, normalizedList)
+        setTimezones(normalizedList)
       }
     } catch (e) {
       console.error('Failed to load timezones', e)
@@ -104,14 +123,8 @@ function SystemSettings(): JSX.Element {
   }, [])
 
   useEffect(() => {
-    void fetchData()
-
-    const timer = window.setInterval(() => {
-      void fetchData(true)
-    }, 5000)
-
-    return () => window.clearInterval(timer)
-  }, [])
+    void fetchData(cachedConfigAtMount !== undefined)
+  }, [cachedConfigAtMount])
 
   const handleSave = async () => {
     setSaving(true)
@@ -156,22 +169,13 @@ function SystemSettings(): JSX.Element {
   }
 
   return (
-    <div className="p-6">
-      <div className="mx-auto max-w-3xl">
-        <div className="mb-6">
-          <h2 className="text-2xl font-bold text-foreground">System Properties</h2>
-        </div>
-
-        <div className="flex flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm">
-          <div className="flex items-center justify-between border-b border-border bg-muted px-4 py-3">
-            <div>
-              <h3 className="text-lg font-semibold text-foreground">
-                {acModule?.name || config.hostname || 'Router'}
-              </h3>
-            </div>
-          </div>
-
-          <div className="space-y-4 p-5">
+    <PageShell size="narrow">
+      <PageHeader
+        title="System Properties"
+        description="Configure the gateway identity, clock and timezone."
+      />
+      <SectionCard title={acModule?.name || config.hostname || 'Router'}>
+          <div className="space-y-5">
             {firstLoad ? (
               <div className="text-sm text-muted-foreground">Loading settings...</div>
             ) : (
@@ -194,9 +198,9 @@ function SystemSettings(): JSX.Element {
                 )}
 
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                  <Label className="mb-2 block">
                     Local Time
-                  </label>
+                  </Label>
                   <div className="flex w-full items-center justify-between rounded border border-border bg-muted px-3 py-2 font-mono text-sm text-foreground">
                     <span>{config.localtime}</span>
                     <span className="h-2 w-2 animate-pulse rounded-full bg-success" />
@@ -207,12 +211,12 @@ function SystemSettings(): JSX.Element {
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                  <Label htmlFor="system-hostname" className="mb-2 block">
                     Hostname
-                  </label>
-                  <input
+                  </Label>
+                  <Input
+                    id="system-hostname"
                     type="text"
-                    className="w-full rounded border border-border px-3 py-2 text-sm focus:border-ring focus:outline-none"
                     value={config.hostname}
                     onChange={(e) => setConfig({ ...config, hostname: e.target.value })}
                   />
@@ -222,11 +226,11 @@ function SystemSettings(): JSX.Element {
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                  <Label htmlFor="system-timezone" className="mb-2 block">
                     Timezone
-                  </label>
-                  <select
-                    className="w-full rounded border border-border bg-card px-3 py-2 text-sm focus:border-ring focus:outline-none"
+                  </Label>
+                  <NativeSelect
+                    id="system-timezone"
                     value={config.timezone}
                     onChange={(e) => setConfig({ ...config, timezone: e.target.value })}
                   >
@@ -239,23 +243,21 @@ function SystemSettings(): JSX.Element {
                         {tz.label}
                       </option>
                     ))}
-                  </select>
+                  </NativeSelect>
                   <p className="mt-1 text-xs text-muted-foreground">
                     Sets the system timezone.
                   </p>
                 </div>
               </>
             )}
-          </div>
-
-          <div className="border-t border-border bg-muted px-4 py-3 text-right">
+          <div className="mt-6 flex justify-end border-t border-border pt-4">
             <Button onClick={handleSave} disabled={saving || firstLoad}>
               {saving ? 'Saving…' : 'Save'}
             </Button>
           </div>
         </div>
-      </div>
-    </div>
+      </SectionCard>
+    </PageShell>
   )
 }
 

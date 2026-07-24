@@ -6,6 +6,21 @@ import { apiFetch } from '@/utils/http'
 import { confirmDialog } from '@/components/ui/confirm'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { NativeSelect } from '@/components/ui/native-select'
+import { Switch } from '@/components/ui/switch'
+import { Table } from '@/components/ui/table'
+import { PageHeader, PageShell } from '@/components/page'
+import { getPageDataCache, setPageDataCache } from '@/utils/page-data-cache'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog'
 import {
   Shield,
   Plus,
@@ -59,6 +74,8 @@ type FirewallResponse = {
   zones: FirewallZone[]
   port_forwards: PortForward[]
 }
+
+const FIREWALL_CACHE_KEY = 'network.firewall'
 
 type PortForwardForm = {
   section?: string
@@ -141,23 +158,25 @@ function safeListText(value?: string[] | null): string {
 // ---------- Component ----------
 
 export default function Firewall(): JSX.Element {
-  const [data, setData] = useState<FirewallResponse | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [, setBackgroundLoading] = useState(false)
+  const [cachedAtMount] = useState<FirewallResponse | undefined>(() =>
+    getPageDataCache<FirewallResponse>(FIREWALL_CACHE_KEY)
+  )
+  const [data, setData] = useState<FirewallResponse | null>(() => cachedAtMount ?? null)
+  const [loading, setLoading] = useState(() => cachedAtMount === undefined)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const [synFlood, setSynFlood] = useState(true)
-  const [flowOffloading, setFlowOffloading] = useState(false)
+  const [synFlood, setSynFlood] = useState(() => cachedAtMount?.defaults.syn_flood ?? true)
+  const [flowOffloading, setFlowOffloading] = useState(
+    () => cachedAtMount?.defaults.flow_offloading ?? false
+  )
 
   const [isFormOpen, setIsFormOpen] = useState(false)
   const [formMode, setFormMode] = useState<'create' | 'edit'>('create')
   const [form, setForm] = useState<PortForwardForm>(EMPTY_FORWARD)
 
   const fetchFirewall = useCallback(async (isBackground = false) => {
-    if (isBackground) {
-      setBackgroundLoading(true)
-    } else {
+    if (!isBackground) {
       setLoading(true)
     }
 
@@ -175,12 +194,14 @@ export default function Firewall(): JSX.Element {
 
       const json = (await res.json()) as FirewallResponse
 
-      setData({
+      const normalizedData: FirewallResponse = {
         defaults: json.defaults,
         zones: Array.isArray(json.zones) ? json.zones : [],
         port_forwards: Array.isArray(json.port_forwards) ? json.port_forwards : []
-      })
+      }
 
+      setPageDataCache(FIREWALL_CACHE_KEY, normalizedData)
+      setData(normalizedData)
       setSynFlood(json.defaults?.syn_flood ?? true)
       setFlowOffloading(json.defaults?.flow_offloading ?? false)
     } catch (err: unknown) {
@@ -188,26 +209,12 @@ export default function Firewall(): JSX.Element {
       if (!isBackground) setData(null)
     } finally {
       setLoading(false)
-      setBackgroundLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    void fetchFirewall()
-
-    let inFlight = false
-
-    const timer = window.setInterval(() => {
-      if (inFlight) return
-      inFlight = true
-
-      void fetchFirewall(true).finally(() => {
-        inFlight = false
-      })
-    }, 8000)
-
-    return () => window.clearInterval(timer)
-  }, [fetchFirewall])
+    void fetchFirewall(cachedAtMount !== undefined)
+  }, [cachedAtMount, fetchFirewall])
 
   const postAction = async (payload: unknown) => {
     const res = await apiFetch('/api/net/firewall', {
@@ -375,16 +382,11 @@ export default function Firewall(): JSX.Element {
   }, [data, synFlood, flowOffloading])
 
   return (
-    <div className="w-full p-6">
-      <div className="mx-auto max-w-6xl">
-        <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-3xl font-bold text-foreground">Firewall</h2>
-            <p className="mt-1 text-muted-foreground">
-              Firewall overview, basic toggles, and port forwarding rules.
-            </p>
-          </div>
-        </div>
+    <PageShell>
+      <PageHeader
+        title="Firewall"
+        description="Firewall overview, basic toggles, and port forwarding rules."
+      />
 
         {error && (
           <div className="mb-6 rounded border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
@@ -423,20 +425,12 @@ export default function Firewall(): JSX.Element {
                     <div className="space-y-3 text-sm">
                       <label className="flex items-center justify-between gap-3">
                         <span>SYN-flood protection</span>
-                        <input
-                          type="checkbox"
-                          checked={synFlood}
-                          onChange={(e) => setSynFlood(e.target.checked)}
-                        />
+                        <Switch checked={synFlood} onCheckedChange={setSynFlood} />
                       </label>
 
                       <label className="flex items-center justify-between gap-3">
                         <span>Software flow offloading</span>
-                        <input
-                          type="checkbox"
-                          checked={flowOffloading}
-                          onChange={(e) => setFlowOffloading(e.target.checked)}
-                        />
+                        <Switch checked={flowOffloading} onCheckedChange={setFlowOffloading} />
                       </label>
 
                       <div className="flex items-center justify-between gap-3">
@@ -498,7 +492,7 @@ export default function Firewall(): JSX.Element {
                     <div className="mb-3 font-semibold text-foreground">Zones</div>
 
                     <div className="overflow-x-auto rounded border">
-                      <table className="min-w-full text-left text-xs">
+                      <Table className="min-w-full text-left text-xs">
                         <thead className="border-b border-border text-muted-foreground">
                           <tr>
                             <th className="px-3 py-2">Zone</th>
@@ -532,7 +526,7 @@ export default function Firewall(): JSX.Element {
                             ))
                           )}
                         </tbody>
-                      </table>
+                      </Table>
                     </div>
                   </div>
                 </div>
@@ -559,7 +553,7 @@ export default function Firewall(): JSX.Element {
 
               <CardContent className="p-4">
                 <div className="overflow-x-auto rounded border">
-                  <table className="min-w-full text-left text-xs">
+                  <Table className="min-w-full text-left text-xs">
                     <thead className="border-b border-border text-muted-foreground">
                       <tr>
                         <th className="px-3 py-2">Name</th>
@@ -613,10 +607,12 @@ export default function Firewall(): JSX.Element {
                             <td className="px-3 py-2">
                               <div className="flex justify-end gap-2">
                                 <Button
-                                  variant="outline"
-                                  size="sm"
+                                  variant={item.enabled ? 'warning' : 'success'}
+                                  size="icon"
                                   onClick={() => void toggleForward(item)}
                                   disabled={saving}
+                                  title={item.enabled ? 'Disable port forward' : 'Enable port forward'}
+                                  aria-label={item.enabled ? 'Disable port forward' : 'Enable port forward'}
                                 >
                                   {item.enabled ? (
                                     <PowerOff className="h-3 w-3" />
@@ -627,19 +623,22 @@ export default function Firewall(): JSX.Element {
 
                                 <Button
                                   variant="outline"
-                                  size="sm"
+                                  size="icon"
                                   onClick={() => openEditForm(item)}
                                   disabled={saving}
+                                  title="Edit port forward"
+                                  aria-label="Edit port forward"
                                 >
                                   <Edit className="h-3 w-3" />
                                 </Button>
 
                                 <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="border-destructive/30 text-destructive hover:bg-destructive/10"
+                                  variant="destructiveOutline"
+                                  size="icon"
                                   onClick={() => void deleteForward(item)}
                                   disabled={saving}
+                                  title="Delete port forward"
+                                  aria-label="Delete port forward"
                                 >
                                   <Trash2 className="h-3 w-3" />
                                 </Button>
@@ -649,128 +648,109 @@ export default function Firewall(): JSX.Element {
                         ))
                       )}
                     </tbody>
-                  </table>
+                  </Table>
                 </div>
               </CardContent>
             </Card>
           </div>
         ) : null}
-      </div>
-
-      {isFormOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-          <div className="max-w-[94vw] overflow-hidden rounded-lg bg-card shadow-xl sm:w-[620px]">
-            <div className="border-b border-border px-6 py-4">
-              <h3 className="text-lg font-semibold text-foreground">
-                {formMode === 'create' ? 'Add Port Forward' : 'Edit Port Forward'}
-              </h3>
-              <p className="text-sm text-muted-foreground">
-                Create a controlled DNAT rule.
-              </p>
-            </div>
+      <Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>
+        <DialogContent className="sm:max-w-[620px]">
+          <DialogHeader>
+            <DialogTitle>{formMode === 'create' ? 'Add Port Forward' : 'Edit Port Forward'}</DialogTitle>
+            <DialogDescription>Create a controlled DNAT rule.</DialogDescription>
+          </DialogHeader>
 
             <div className="space-y-4 p-6">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Name</label>
-                  <input
+                  <Label>Name</Label>
+                  <Input
                     value={form.name}
                     onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-                    className="w-full rounded border px-3 py-2"
                   />
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Protocol</label>
-                  <select
+                  <Label>Protocol</Label>
+                  <NativeSelect
                     value={form.proto}
                     onChange={(e) => setForm((p) => ({ ...p, proto: e.target.value }))}
-                    className="w-full rounded border bg-card px-3 py-2"
                   >
                     <option value="tcp">TCP</option>
                     <option value="udp">UDP</option>
                     <option value="tcp udp">TCP+UDP</option>
-                  </select>
+                  </NativeSelect>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Source Zone</label>
-                  <select
+                  <Label>Source Zone</Label>
+                  <NativeSelect
                     value={form.src}
                     onChange={(e) => setForm((p) => ({ ...p, src: e.target.value }))}
-                    className="w-full rounded border bg-card px-3 py-2"
                   >
                     <option value="lan">lan</option>
                     <option value="wan">wan</option>
-                  </select>
+                  </NativeSelect>
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Destination Zone</label>
-                  <select
+                  <Label>Destination Zone</Label>
+                  <NativeSelect
                     value={form.dest}
                     onChange={(e) => setForm((p) => ({ ...p, dest: e.target.value }))}
-                    className="w-full rounded border bg-card px-3 py-2"
                   >
                     <option value="wan">wan</option>
                     <option value="lan">lan</option>
-                  </select>
+                  </NativeSelect>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium">External IP</label>
-                  <input
+                  <Label>External IP</Label>
+                  <Input
                     value={form.src_dip}
                     onChange={(e) => setForm((p) => ({ ...p, src_dip: e.target.value }))}
-                    className="w-full rounded border px-3 py-2"
                   />
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium">External Port</label>
-                  <input
+                  <Label>External Port</Label>
+                  <Input
                     value={form.src_dport}
                     onChange={(e) => setForm((p) => ({ ...p, src_dport: e.target.value }))}
-                    className="w-full rounded border px-3 py-2"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Internal IP</label>
-                  <input
+                  <Label>Internal IP</Label>
+                  <Input
                     value={form.dest_ip}
                     onChange={(e) => setForm((p) => ({ ...p, dest_ip: e.target.value }))}
-                    className="w-full rounded border px-3 py-2"
                   />
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Internal Port</label>
-                  <input
+                  <Label>Internal Port</Label>
+                  <Input
                     value={form.dest_port}
                     onChange={(e) => setForm((p) => ({ ...p, dest_port: e.target.value }))}
-                    className="w-full rounded border px-3 py-2"
                   />
                 </div>
               </div>
 
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={form.enabled}
-                  onChange={(e) => setForm((p) => ({ ...p, enabled: e.target.checked }))}
-                />
+              <Label className="flex items-center gap-2">
+                <Switch checked={form.enabled} onCheckedChange={(checked) => setForm((p) => ({ ...p, enabled: checked }))} />
                 Enable this rule
-              </label>
+              </Label>
             </div>
 
-            <div className="flex justify-end gap-3 border-t border-border px-6 py-4">
+            <DialogFooter>
               <Button variant="outline" onClick={() => setIsFormOpen(false)} disabled={saving}>
                 Cancel
               </Button>
@@ -778,10 +758,9 @@ export default function Firewall(): JSX.Element {
               <Button onClick={() => void saveForward()} disabled={saving}>
                 {saving ? 'Saving...' : 'Save & Apply'}
               </Button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+            </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </PageShell>
   )
 }

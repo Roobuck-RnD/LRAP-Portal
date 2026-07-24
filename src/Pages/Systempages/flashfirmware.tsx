@@ -17,6 +17,18 @@ import { useCurrentAllModuleStore } from "@/states/allModuleState";
 import { apiFetch } from "@/utils/http";
 import { confirmDialog } from "@/components/ui/confirm";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { PageHeader, PageShell, SectionCard } from "@/components/page";
+import { FullScreenTaskOverlay } from "@/components/task-overlay";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 type Module = {
   name: string;
@@ -177,11 +189,12 @@ function FirmwarePicker({
       />
 
       {!file ? (
-        <button
+        <Button
           type="button"
+          variant="outline"
           onClick={openPicker}
           disabled={disabled}
-          className="flex w-full cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-muted/40 px-6 py-12 text-center transition hover:border-primary/50 hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
+          className="h-auto w-full flex-col rounded-lg border-2 border-dashed bg-muted/40 px-6 py-12 hover:border-primary/50 hover:bg-primary/10"
         >
           <div className="mb-3 rounded-full bg-card p-3 shadow-sm">
             <FileUp className="h-7 w-7 text-primary" />
@@ -194,7 +207,7 @@ function FirmwarePicker({
           <div className="mt-1 text-xs text-muted-foreground">
             Supported: lrap-fw-*.bin
           </div>
-        </button>
+        </Button>
       ) : (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-primary/30 bg-primary/10 px-4 py-4">
           <div className="flex min-w-0 items-center gap-3">
@@ -223,11 +236,12 @@ function FirmwarePicker({
             </Button>
 
             <Button
-              variant="outline"
-              size="sm"
+              variant="destructiveOutline"
+              size="icon"
               onClick={clearFile}
               disabled={disabled}
-              className="border-destructive/30 text-destructive hover:bg-destructive/10"
+              title="Remove selected firmware"
+              aria-label="Remove selected firmware"
             >
               <X className="h-4 w-4" />
             </Button>
@@ -416,7 +430,7 @@ export default function FlashFirmware(): JSX.Element {
             if (status.done || status.status === "failed") {
               break;
             }
-          } catch (pollErr: unknown) {
+          } catch {
             // 已进入 AC 自刷阶段后断连 = 预期内的 AC 重启 → 进倒计时,别当失败。
             if (
               hasACFlashStarted(lastResponse.results) ||
@@ -460,10 +474,9 @@ export default function FlashFirmware(): JSX.Element {
   };
 
   return (
-    <div className="relative w-full p-6">
+    <PageShell className="relative">
       {acRebootCountdown !== null && (
-        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/80 backdrop-blur-sm transition-all">
-          <div className="flex w-full max-w-md flex-col items-center rounded-xl bg-card p-8 text-center shadow-2xl">
+        <FullScreenTaskOverlay panelClassName="flex flex-col items-center">
             <div className="relative mb-6 flex items-center justify-center">
               <svg className="h-32 w-32 -rotate-90 transform">
                 <circle
@@ -521,23 +534,27 @@ export default function FlashFirmware(): JSX.Element {
             <p className="text-sm font-semibold text-primary">
               Redirecting to login in {acRebootCountdown}s...
             </p>
-          </div>
-        </div>
+        </FullScreenTaskOverlay>
       )}
 
-      {flashLogOpen && acRebootCountdown === null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 p-4 backdrop-blur-sm">
-          <div className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-xl bg-card shadow-2xl">
-            <div className="flex items-center gap-2 border-b px-5 py-4">
+      <Dialog
+        open={flashLogOpen && acRebootCountdown === null}
+        onOpenChange={(open) => {
+          if (!flashing) setFlashLogOpen(open);
+        }}
+      >
+        <DialogContent showCloseButton={!flashing} className="flex max-h-[85vh] max-w-lg flex-col gap-0 overflow-hidden p-0">
+          <DialogHeader className="border-b px-5 py-4">
+            <div className="flex items-center gap-2">
               {flashing ? (
                 <RefreshCw className="h-5 w-5 animate-spin text-primary" />
               ) : (
                 <PackageCheck className="h-5 w-5 text-primary" />
               )}
-              <h3 className="text-lg font-semibold text-foreground">
-                Firmware Upgrade
-              </h3>
+              <DialogTitle>Firmware Upgrade</DialogTitle>
             </div>
+            <DialogDescription className="sr-only">Firmware upgrade progress and device results.</DialogDescription>
+          </DialogHeader>
 
             <div className="flex-1 overflow-y-auto px-5 py-4">
               {message && (
@@ -601,7 +618,7 @@ export default function FlashFirmware(): JSX.Element {
               )}
             </div>
 
-            <div className="border-t bg-muted px-5 py-4">
+            <DialogFooter className="border-t bg-muted px-5 py-4">
               {flashing ? (
                 <p className="text-center text-sm text-muted-foreground">
                   Upgrade in progress — please do not close this window or power
@@ -612,18 +629,11 @@ export default function FlashFirmware(): JSX.Element {
                   <Button onClick={() => setFlashLogOpen(false)}>Confirm</Button>
                 </div>
               )}
-            </div>
-          </div>
-        </div>
-      )}
+            </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-      <div className="mx-auto max-w-6xl">
-        <div className="mb-8">
-          <h2 className="text-3xl font-bold text-foreground">Firmware Upgrade</h2>
-          <p className="mt-1 text-muted-foreground">
-            Upload one firmware package to update the device.
-          </p>
-        </div>
+      <PageHeader title="Firmware Upgrade" description="Upload one firmware package to update the device." />
 
         {!flashLogOpen && message && (
           <div className="mb-6 rounded border border-primary/20 bg-primary/10 p-3 text-sm text-primary">
@@ -631,7 +641,7 @@ export default function FlashFirmware(): JSX.Element {
           </div>
         )}
 
-        <div className="rounded-lg border border-border bg-card p-6">
+        <SectionCard>
           <FirmwarePicker
             file={bundleFile}
             disabled={flashing || acRebootCountdown !== null}
@@ -639,16 +649,10 @@ export default function FlashFirmware(): JSX.Element {
           />
 
           <div className="mt-6 flex flex-col gap-4 border-t border-border pt-5 sm:flex-row sm:items-center sm:justify-between">
-            <label className="flex cursor-pointer items-center gap-2 text-sm text-foreground">
-              <input
-                type="checkbox"
-                className="size-4 accent-primary"
-                checked={keepSettings}
-                onChange={(e) => setKeepSettings(e.target.checked)}
-                disabled={flashing || acRebootCountdown !== null}
-              />
+            <Label className="flex cursor-pointer items-center gap-2">
+              <Switch checked={keepSettings} onCheckedChange={setKeepSettings} disabled={flashing || acRebootCountdown !== null} />
               Keep current configuration
-            </label>
+            </Label>
 
             <Button
               onClick={() => void handleFlashBundle()}
@@ -662,8 +666,7 @@ export default function FlashFirmware(): JSX.Element {
               Flash Firmware
             </Button>
           </div>
-        </div>
-      </div>
-    </div>
+        </SectionCard>
+    </PageShell>
   );
 }

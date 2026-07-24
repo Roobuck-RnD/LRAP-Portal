@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -28,6 +30,8 @@ const (
 	Mtk5GIfName  = "rax0"
 
 	MtkWifiStateEnforceInterval = 5 * time.Second
+	MtkWifiApplyDelay           = 2 * time.Second
+	MtkWifiApplyEstimateSeconds = 45
 )
 
 type mtkBand string
@@ -48,10 +52,13 @@ type MtkWifiInfo struct {
 }
 
 type MtkWifiModuleRadio struct {
-	Name   string `json:"name"`
-	Type   string `json:"type"` // main / ap
-	IP     string `json:"ip"`
-	Online bool   `json:"online"`
+	ModuleID      string `json:"module_id"`
+	Name          string `json:"name"`
+	Type          string `json:"type"` // main / ap
+	IP            string `json:"ip"`
+	Port          string `json:"port,omitempty"`
+	IdentityReady bool   `json:"identity_ready"`
+	Online        bool   `json:"online"`
 
 	Channel24      string `json:"channel_2g"`
 	ChannelWidth24 string `json:"channel_width_2g"`
@@ -65,7 +72,7 @@ type MtkWifiModuleRadio struct {
 	Radio24Enabled bool `json:"radio_enabled_2g"`
 	Radio5Enabled  bool `json:"radio_enabled_5g"`
 
-	// Current interface state. This is useful because wifi restart/reboot can
+	// Current interface state. This is useful because wifi reload/reboot can
 	// temporarily bring a disabled interface back until the enforcer runs.
 	Radio24Running bool `json:"radio_running_2g"`
 	Radio5Running  bool `json:"radio_running_5g"`
@@ -79,16 +86,30 @@ type MtkWifiSyncResult struct {
 }
 
 type MtkWifiSaveResponse struct {
-	Status  string              `json:"status"`
-	Results []MtkWifiSyncResult `json:"results"`
+	Status            string              `json:"status"`
+	Results           []MtkWifiSyncResult `json:"results"`
+	ApplyAfterSeconds int                 `json:"apply_after_seconds"`
+	EstimatedSeconds  int                 `json:"estimated_seconds"`
+}
+
+type mtkWifiApplyTarget struct {
+	ModuleID string
+	IP       string
+	Target   string
+}
+
+type mtkWifiApplyPlan struct {
+	ApplyLocal bool
+	Remotes    []mtkWifiApplyTarget
 }
 
 type MtkWifiRadioToggleRequest struct {
-	Name    string `json:"name"`
-	Type    string `json:"type"` // main / ap
-	IP      string `json:"ip"`
-	Band    string `json:"band"` // 2g / 5g
-	Enabled bool   `json:"enabled"`
+	ModuleID string `json:"module_id"`
+	Name     string `json:"name"`
+	Type     string `json:"type"` // main / ap
+	IP       string `json:"ip"`   // legacy compatibility; never trusted as identity
+	Band     string `json:"band"` // 2g / 5g
+	Enabled  bool   `json:"enabled"`
 }
 
 type MtkWifiRadioToggleResponse struct {
@@ -105,9 +126,10 @@ type mtkRadioState struct {
 }
 
 type mtkCentralWifiState struct {
-	Version   int                      `json:"version"`
-	Modules   map[string]mtkRadioState `json:"modules"`
-	UpdatedAt int64                    `json:"updated_at"`
+	Version        int                      `json:"version"`
+	Modules        map[string]mtkRadioState `json:"modules"`
+	LegacyIPStates map[string]mtkRadioState `json:"legacy_ip_states,omitempty"`
+	UpdatedAt      int64                    `json:"updated_at"`
 }
 
 type mtkRadioRuntimeStatus struct {
@@ -130,6 +152,7 @@ type mtkDatConfig struct {
 
 var mtkMutex sync.Mutex
 var mtkStateEnforcerOnce sync.Once
+var mtkWifiApplyPending atomic.Bool
 
 func init() {
 	startMtkWifiStateEnforcer()
@@ -196,14 +219,25 @@ func mtkWifiHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		resp, err := setMtkWifiLogic(req)
+		resp, applyPlan, err := setMtkWifiLogic(req)
 		if err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":"save failed: %v"}`, err), http.StatusInternalServerError)
 			return
 		}
 
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(resp)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			mtkWifiApplyPending.Store(false)
+			return
+		}
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+
+		// Scheduling happens only after the success response has been written
+		// and flushed. The additional delay gives the browser time to enter its
+		// non-cancellable countdown before any connected radio restarts.
+		scheduleMtkWifiApply(applyPlan)
 
 	case http.MethodPatch:
 		// Kept for direct API callers. The React frontend does not use PATCH anymore.
@@ -251,15 +285,23 @@ func getMtkWifiLogic() (MtkWifiInfo, error) {
 	info.SSID5 = local5Dat.SSID
 	info.Pass5 = local5Dat.Pass
 
+	// Warm ARP before reading state so a legacy IP-keyed file can be migrated
+	// against the same physical-port registry used for this response.
+	registry := discoverManagedAPs(true)
+	portByIP := managedAPPortIndexByIP(registry)
+
 	centralState := readLocalMtkCentralWifiStateDefault()
 	localRadioState := getMtkRadioStateForModule(centralState, mtkStateMainKey)
 	localRuntime := getLocalMtkRadioRuntimeStatus()
 
 	info.Modules = append(info.Modules, MtkWifiModuleRadio{
-		Name:   hostnameFromLocalOrFallback(),
-		Type:   "main",
-		IP:     "",
-		Online: true,
+		ModuleID:      managedMainModuleID,
+		Name:          hostnameFromLocalOrFallback(),
+		Type:          "main",
+		IP:            "",
+		Port:          "br-lan",
+		IdentityReady: true,
+		Online:        true,
 
 		Channel24:      local24Dat.Channel,
 		ChannelWidth24: local24Dat.ChannelWidth,
@@ -277,9 +319,6 @@ func getMtkWifiLogic() (MtkWifiInfo, error) {
 
 	apIPs := APManagementIPs()
 
-	// 一次性解析 IP->物理口,给 AP 编号(只读,goroutine 里并发读安全)
-	portByIP := apPortIndexByIP()
-
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
@@ -295,6 +334,14 @@ func getMtkWifiLogic() (MtkWifiInfo, error) {
 				return
 			}
 
+			managed, identityReady := managedAPByIP(registry, ip)
+			moduleID := ""
+			port := ""
+			if identityReady {
+				moduleID = managed.ModuleID
+				port = managed.Port
+			}
+
 			name := mtkRemoteHostname(ip)
 			if name == "" {
 				name = "RoobuckAP"
@@ -308,7 +355,10 @@ func getMtkWifiLogic() (MtkWifiInfo, error) {
 			content24, err24 := ubusFileReadRemote(ip, Mtk24GPath)
 			content5, err5 := ubusFileReadRemote(ip, Mtk5GPath)
 
-			radioState := getMtkRadioStateForModule(centralState, ip)
+			radioState := defaultMtkRadioState()
+			if identityReady {
+				radioState = getMtkRadioStateForModule(centralState, moduleID)
+			}
 			runtimeState := getRemoteMtkRadioRuntimeStatus(ip)
 
 			online := true
@@ -327,10 +377,13 @@ func getMtkWifiLogic() (MtkWifiInfo, error) {
 
 			mu.Lock()
 			info.Modules = append(info.Modules, MtkWifiModuleRadio{
-				Name:   name,
-				Type:   "ap",
-				IP:     ip,
-				Online: online,
+				ModuleID:      moduleID,
+				Name:          name,
+				Type:          "ap",
+				IP:            ip,
+				Port:          port,
+				IdentityReady: identityReady,
+				Online:        online,
 
 				Channel24:      dat24.Channel,
 				ChannelWidth24: dat24.ChannelWidth,
@@ -381,7 +434,336 @@ func mtkResultTarget(name, typ, ip string, portByIP map[string]int) string {
 	return "Antenna"
 }
 
-func setMtkWifiLogic(req MtkWifiInfo) (MtkWifiSaveResponse, error) {
+func mtkResultTargetForModuleID(moduleID string, fallbackName string) string {
+	if moduleID == managedMainModuleID {
+		return "Router"
+	}
+	if portIndex, ok := managedAntennaPortIndex(moduleID); ok {
+		return apDisplayName("Antenna", portIndex)
+	}
+	return nonEmpty(strings.TrimSpace(fallbackName), "Antenna")
+}
+
+// resolveMtkManagedAP resolves stable identity to the AP's current address.
+// The legacy IP is accepted only for requests from an older frontend; it must
+// still belong to the managed pool and have a proven physical-port mapping.
+func resolveMtkManagedAP(moduleID string, legacyIP string, registry []ManagedModule) (ManagedModule, error) {
+	moduleID = strings.ToLower(strings.TrimSpace(moduleID))
+	legacyIP = strings.TrimSpace(legacyIP)
+
+	if moduleID != "" {
+		if _, ok := managedAntennaPortIndex(moduleID); !ok {
+			return ManagedModule{}, fmt.Errorf("invalid antenna identity")
+		}
+		module, ok := managedAPByModuleID(registry, moduleID)
+		if !ok {
+			return ManagedModule{}, fmt.Errorf("antenna identity is not currently reachable")
+		}
+		return module, nil
+	}
+
+	if !IsManagedAPIP(legacyIP) {
+		return ManagedModule{}, fmt.Errorf("invalid antenna address")
+	}
+	module, ok := managedAPByIP(registry, legacyIP)
+	if !ok {
+		return ManagedModule{}, fmt.Errorf("antenna physical identity is not ready")
+	}
+	return module, nil
+}
+
+type mtkWifiPreparedConfig struct {
+	Module     MtkWifiModuleRadio
+	ModuleID   string
+	Target     string
+	IP         string
+	Local      bool
+	Original24 string
+	Original5  string
+	Updated24  string
+	Updated5   string
+	RadioState mtkRadioState
+}
+
+func setMtkWifiLogic(req MtkWifiInfo) (MtkWifiSaveResponse, mtkWifiApplyPlan, error) {
+	mtkMutex.Lock()
+	defer mtkMutex.Unlock()
+
+	if !mtkWifiApplyPending.CompareAndSwap(false, true) {
+		return MtkWifiSaveResponse{}, mtkWifiApplyPlan{}, fmt.Errorf("another WiFi apply is already in progress")
+	}
+	keepPending := false
+	defer func() {
+		if !keepPending {
+			mtkWifiApplyPending.Store(false)
+		}
+	}()
+
+	req.SSID24 = strings.TrimSpace(req.SSID24)
+	req.SSID5 = strings.TrimSpace(req.SSID5)
+	normalizeMtkWifiRequest(&req)
+
+	if err := validateMtkWifiRequest(req); err != nil {
+		return MtkWifiSaveResponse{}, mtkWifiApplyPlan{}, err
+	}
+
+	registry := discoverManagedAPs(true)
+	prepared := make([]mtkWifiPreparedConfig, 0, len(req.Modules))
+	seenModuleIDs := make(map[string]bool, len(req.Modules))
+
+	// Resolve and snapshot every module before the first write. If any managed
+	// radio is unavailable, nothing is changed and no restart is scheduled.
+	for _, mod := range req.Modules {
+		moduleID := managedMainModuleID
+		target := "Router"
+		ip := ""
+		isLocal := mod.Type == "main" || mod.ModuleID == managedMainModuleID
+
+		if !isLocal {
+			managed, err := resolveMtkManagedAP(mod.ModuleID, mod.IP, registry)
+			if err != nil {
+				return MtkWifiSaveResponse{}, mtkWifiApplyPlan{}, err
+			}
+			target = mtkResultTargetForModuleID(managed.ModuleID, mod.Name)
+			if !mtkPingOnce(managed.IP) {
+				return MtkWifiSaveResponse{}, mtkWifiApplyPlan{}, fmt.Errorf("%s is not reachable", target)
+			}
+			moduleID = managed.ModuleID
+			ip = managed.IP
+			mod.ModuleID = moduleID
+			mod.IP = ip
+		}
+
+		if seenModuleIDs[moduleID] {
+			return MtkWifiSaveResponse{}, mtkWifiApplyPlan{}, fmt.Errorf("duplicate WiFi settings for %s", target)
+		}
+		seenModuleIDs[moduleID] = true
+
+		original24, original5, err := readMtkConfigPair(isLocal, ip)
+		if err != nil {
+			return MtkWifiSaveResponse{}, mtkWifiApplyPlan{}, fmt.Errorf("%s configuration is unavailable: %v", target, err)
+		}
+
+		updates24 := buildMtkDatUpdates(req.SSID24, req.Pass24, mod.Channel24, mod.ChannelWidth24, mod.TxPower24, mtkBand24G)
+		updates5 := buildMtkDatUpdates(req.SSID5, req.Pass5, mod.Channel5, mod.ChannelWidth5, mod.TxPower5, mtkBand5G)
+
+		prepared = append(prepared, mtkWifiPreparedConfig{
+			Module:     mod,
+			ModuleID:   moduleID,
+			Target:     target,
+			IP:         ip,
+			Local:      isLocal,
+			Original24: original24,
+			Original5:  original5,
+			Updated24:  updateMtkDatContent(original24, updates24),
+			Updated5:   updateMtkDatContent(original5, updates5),
+			RadioState: mtkRadioState{
+				Radio24Enabled: mod.Radio24Enabled,
+				Radio5Enabled:  mod.Radio5Enabled,
+				UpdatedAt:      time.Now().Unix(),
+			},
+		})
+	}
+
+	originalState, stateExisted, err := snapshotMtkWifiState()
+	if err != nil {
+		return MtkWifiSaveResponse{}, mtkWifiApplyPlan{}, err
+	}
+
+	written := make([]mtkWifiPreparedConfig, 0, len(prepared))
+	rollback := func() {
+		for i := len(written) - 1; i >= 0; i-- {
+			item := written[i]
+			if restoreErr := restoreMtkPreparedConfig(item); restoreErr != nil {
+				fmt.Printf("[MTK WiFi] rollback failed for %s: %v\n", item.Target, restoreErr)
+			}
+		}
+		if restoreErr := restoreMtkWifiState(originalState, stateExisted); restoreErr != nil {
+			fmt.Printf("[MTK WiFi] radio state rollback failed: %v\n", restoreErr)
+		}
+	}
+
+	for _, item := range prepared {
+		written = append(written, item)
+		if err := writeMtkPreparedConfig(item); err != nil {
+			rollback()
+			return MtkWifiSaveResponse{}, mtkWifiApplyPlan{}, fmt.Errorf("%s update failed: %v", item.Target, err)
+		}
+		if err := verifyMtkPreparedConfig(item, req); err != nil {
+			rollback()
+			return MtkWifiSaveResponse{}, mtkWifiApplyPlan{}, fmt.Errorf("%s verification failed: %v", item.Target, err)
+		}
+	}
+
+	centralState := readLocalMtkCentralWifiStateDefault()
+	for _, item := range prepared {
+		setMtkRadioStateForModule(&centralState, item.ModuleID, item.RadioState)
+	}
+	if err := writeLocalMtkCentralWifiState(centralState); err != nil {
+		rollback()
+		return MtkWifiSaveResponse{}, mtkWifiApplyPlan{}, fmt.Errorf("save radio states failed: %v", err)
+	}
+
+	savedState := readLocalMtkCentralWifiStateDefault()
+	for _, item := range prepared {
+		got := getMtkRadioStateForModule(savedState, item.ModuleID)
+		if got.Radio24Enabled != item.RadioState.Radio24Enabled || got.Radio5Enabled != item.RadioState.Radio5Enabled {
+			rollback()
+			return MtkWifiSaveResponse{}, mtkWifiApplyPlan{}, fmt.Errorf("%s radio state verification failed", item.Target)
+		}
+	}
+
+	results := make([]MtkWifiSyncResult, 0, len(prepared))
+	applyPlan := mtkWifiApplyPlan{}
+	for _, item := range prepared {
+		results = append(results, MtkWifiSyncResult{Target: item.Target, OK: true})
+		if item.Local {
+			applyPlan.ApplyLocal = true
+		} else {
+			applyPlan.Remotes = append(applyPlan.Remotes, mtkWifiApplyTarget{
+				ModuleID: item.ModuleID,
+				IP:       item.IP,
+				Target:   item.Target,
+			})
+		}
+	}
+
+	keepPending = true
+	return MtkWifiSaveResponse{
+		Status:            "ok",
+		Results:           results,
+		ApplyAfterSeconds: int(MtkWifiApplyDelay / time.Second),
+		EstimatedSeconds:  MtkWifiApplyEstimateSeconds,
+	}, applyPlan, nil
+}
+
+func readMtkConfigPair(local bool, ip string) (string, string, error) {
+	if local {
+		content24, err := os.ReadFile(Mtk24GPath)
+		if err != nil {
+			return "", "", err
+		}
+		content5, err := os.ReadFile(Mtk5GPath)
+		if err != nil {
+			return "", "", err
+		}
+		return string(content24), string(content5), nil
+	}
+
+	content24, err := ubusFileReadRemote(ip, Mtk24GPath)
+	if err != nil {
+		return "", "", err
+	}
+	content5, err := ubusFileReadRemote(ip, Mtk5GPath)
+	if err != nil {
+		return "", "", err
+	}
+	return content24, content5, nil
+}
+
+func writeMtkPreparedConfig(item mtkWifiPreparedConfig) error {
+	if item.Local {
+		if err := os.WriteFile(Mtk24GPath, []byte(item.Updated24), 0644); err != nil {
+			return err
+		}
+		return os.WriteFile(Mtk5GPath, []byte(item.Updated5), 0644)
+	}
+
+	if err := ubusFileWriteRemote(item.IP, Mtk24GPath, item.Updated24); err != nil {
+		return err
+	}
+	return ubusFileWriteRemote(item.IP, Mtk5GPath, item.Updated5)
+}
+
+func restoreMtkPreparedConfig(item mtkWifiPreparedConfig) error {
+	if item.Local {
+		var errs []string
+		if err := os.WriteFile(Mtk24GPath, []byte(item.Original24), 0644); err != nil {
+			errs = append(errs, err.Error())
+		}
+		if err := os.WriteFile(Mtk5GPath, []byte(item.Original5), 0644); err != nil {
+			errs = append(errs, err.Error())
+		}
+		if len(errs) > 0 {
+			return fmt.Errorf("%s", strings.Join(errs, "; "))
+		}
+		return nil
+	}
+
+	var errs []string
+	if err := ubusFileWriteRemote(item.IP, Mtk24GPath, item.Original24); err != nil {
+		errs = append(errs, err.Error())
+	}
+	if err := ubusFileWriteRemote(item.IP, Mtk5GPath, item.Original5); err != nil {
+		errs = append(errs, err.Error())
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func verifyMtkPreparedConfig(item mtkWifiPreparedConfig, req MtkWifiInfo) error {
+	content24, content5, err := readMtkConfigPair(item.Local, item.IP)
+	if err != nil {
+		return err
+	}
+
+	if err := verifyMtkDatContent(content24, req.SSID24, req.Pass24, item.Module.Channel24, item.Module.ChannelWidth24, item.Module.TxPower24, mtkBand24G); err != nil {
+		return fmt.Errorf("2.4g: %v", err)
+	}
+	if err := verifyMtkDatContent(content5, req.SSID5, req.Pass5, item.Module.Channel5, item.Module.ChannelWidth5, item.Module.TxPower5, mtkBand5G); err != nil {
+		return fmt.Errorf("5g: %v", err)
+	}
+	return nil
+}
+
+func verifyMtkDatContent(content string, wantSSID string, wantPass string, wantChannel string, wantWidth string, wantTxPower int, band mtkBand) error {
+	got := parseMtkDatContent(content, band)
+	if got.SSID != wantSSID {
+		return fmt.Errorf("ssid not updated")
+	}
+	if got.Pass != wantPass {
+		return fmt.Errorf("password not updated")
+	}
+	if got.Channel != strings.TrimSpace(wantChannel) {
+		return fmt.Errorf("channel not updated")
+	}
+	if got.ChannelWidth != strings.TrimSpace(wantWidth) {
+		return fmt.Errorf("channel width not updated")
+	}
+	if got.TxPower != wantTxPower {
+		return fmt.Errorf("tx power not updated")
+	}
+	return nil
+}
+
+func snapshotMtkWifiState() ([]byte, bool, error) {
+	content, err := os.ReadFile(MtkWifiStatePath)
+	if err == nil {
+		return content, true, nil
+	}
+	if os.IsNotExist(err) {
+		return nil, false, nil
+	}
+	return nil, false, fmt.Errorf("read radio state failed: %v", err)
+}
+
+func restoreMtkWifiState(content []byte, existed bool) error {
+	if !existed {
+		if err := os.Remove(MtkWifiStatePath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+
+	if err := os.MkdirAll(filepath.Dir(MtkWifiStatePath), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(MtkWifiStatePath, content, 0644)
+}
+
+func setMtkWifiLogicLegacy(req MtkWifiInfo) (MtkWifiSaveResponse, error) {
 	mtkMutex.Lock()
 	defer mtkMutex.Unlock()
 
@@ -396,13 +778,11 @@ func setMtkWifiLogic(req MtkWifiInfo) (MtkWifiSaveResponse, error) {
 
 	results := make([]MtkWifiSyncResult, 0, len(req.Modules))
 	needApplyLocal := false
-	portByIP := apPortIndexByIP()
+	registry := discoverManagedAPs(true)
 
 	for _, mod := range req.Modules {
-		// Result.IP 仅用于前端显示,一律置空以免暴露管理网 IP;实际写入仍用 mod.IP 内部寻址。
-		target := mtkResultTarget(mod.Name, mod.Type, mod.IP, portByIP)
-
-		if mod.Type == "main" || mod.IP == "" {
+		if mod.Type == "main" || mod.ModuleID == managedMainModuleID {
+			target := "Router"
 			err := updateLocalMtkWifi(req, mod)
 			if err == nil {
 				needApplyLocal = true
@@ -417,6 +797,22 @@ func setMtkWifiLogic(req MtkWifiInfo) (MtkWifiSaveResponse, error) {
 
 			continue
 		}
+
+		managed, resolveErr := resolveMtkManagedAP(mod.ModuleID, mod.IP, registry)
+		target := mtkResultTargetForModuleID(mod.ModuleID, mod.Name)
+		if resolveErr != nil {
+			results = append(results, MtkWifiSyncResult{
+				Target: target,
+				IP:     "",
+				OK:     false,
+				Error:  resolveErr.Error(),
+			})
+			continue
+		}
+
+		mod.ModuleID = managed.ModuleID
+		mod.IP = managed.IP
+		target = mtkResultTargetForModuleID(managed.ModuleID, mod.Name)
 
 		if !mtkPingOnce(mod.IP) {
 			results = append(results, MtkWifiSyncResult{
@@ -485,7 +881,7 @@ func updateRemoteMtkWifi(ip string, req MtkWifiInfo, mod MtkWifiModuleRadio) err
 		return fmt.Errorf("verify remote %s 5g failed: %v", ip, err)
 	}
 
-	applyRemoteMtkWifiAsync(ip)
+	applyRemoteMtkWifiAsync(ip, mod.ModuleID)
 
 	return nil
 }
@@ -532,17 +928,62 @@ func buildMtkDatUpdates(ssid string, pass string, channel string, width string, 
 // mtkwifi.__run_in_child_env(__mtkwifi_reload, devname)
 //
 // __mtkwifi_reload 内部根据 diff 调用：
-// wifi restart <devname>
-// 或：
 // wifi reload <devname>
 //
-// 这里仍然不复刻 Lua diff 逻辑，直接使用更强的 wifi restart。
-// 因为 Channel / Bandwidth 变化通常需要 restart，而不是简单 reload。
+// IMPORTANT: Never use `/sbin/wifi restart` in this product. The MTK restart
+// path unloads and reloads the wireless/WHNAT driver stack, which also flaps
+// lan1-lan4 and can make APs lose their reserved management addresses. All WiFi
+// settings exposed by this portal (SSID, password, channel, width, power and
+// runtime radio state) must be applied with `/sbin/wifi reload`.
+
+func scheduleMtkWifiApply(plan mtkWifiApplyPlan) {
+	go func() {
+		defer mtkWifiApplyPending.Store(false)
+		time.Sleep(MtkWifiApplyDelay)
+
+		centralState := readLocalMtkCentralWifiStateDefault()
+		var wg sync.WaitGroup
+
+		if plan.ApplyLocal {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				fmt.Println("Applying staged Router WiFi settings: /sbin/wifi reload...")
+				out, err := exec.Command("sh", "-c", mtkLocalApplyWifiCommand()).CombinedOutput()
+				if err != nil {
+					fmt.Printf("local MTK wifi apply failed: %v output=%s\n", err, string(out))
+				}
+				time.Sleep(3 * time.Second)
+				if err := applyLocalMtkRadioState(getMtkRadioStateForModule(centralState, mtkStateMainKey)); err != nil {
+					fmt.Printf("local MTK wifi state re-apply failed: %v\n", err)
+				}
+			}()
+		}
+
+		for _, target := range plan.Remotes {
+			target := target
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				state := getMtkRadioStateForModule(centralState, target.ModuleID)
+				if _, err := ubusCallJSONAt(target.IP, AnonSID, "file", "exec", map[string]any{
+					"command": "sh",
+					"params":  []string{"-c", mtkRemoteApplyWifiCommand(state)},
+				}); err != nil {
+					fmt.Printf("[MTK WiFi] delayed apply failed for %s (%s): %v\n", target.Target, target.IP, err)
+				}
+			}()
+		}
+
+		wg.Wait()
+		time.Sleep(8 * time.Second)
+	}()
+}
 
 func applyLocalMtkWifiAsync() {
 	go func() {
 		time.Sleep(1 * time.Second)
-		fmt.Println("Applying local MTK WiFi settings: /sbin/wifi restart...")
+		fmt.Println("Applying local MTK WiFi settings: /sbin/wifi reload...")
 
 		cmd := exec.Command("sh", "-c", mtkLocalApplyWifiCommand())
 		out, err := cmd.CombinedOutput()
@@ -550,7 +991,7 @@ func applyLocalMtkWifiAsync() {
 			fmt.Printf("local MTK wifi apply failed: %v output=%s\n", err, string(out))
 		}
 
-		// wifi restart can bring disabled radios back up. Re-apply the central
+		// wifi reload can bring disabled radios back up. Re-apply the central
 		// desired runtime state after restart finishes.
 		time.Sleep(3 * time.Second)
 		if err := enforceLocalMtkWifiRadioStateFromCentral(); err != nil {
@@ -559,10 +1000,14 @@ func applyLocalMtkWifiAsync() {
 	}()
 }
 
-func applyRemoteMtkWifiAsync(ip string) {
+func applyRemoteMtkWifiAsync(ip string, moduleID string) {
 	go func() {
+		if _, ok := managedAntennaPortIndex(moduleID); !ok {
+			fmt.Printf("remote MTK wifi state re-apply skipped for %s: physical identity unavailable\n", ip)
+			return
+		}
 
-		state := getMtkRadioStateForModule(readLocalMtkCentralWifiStateDefault(), ip)
+		state := getMtkRadioStateForModule(readLocalMtkCentralWifiStateDefault(), moduleID)
 
 		_, _ = ubusCallJSONAt(ip, AnonSID, "file", "exec", map[string]any{
 			"command": "sh",
@@ -574,15 +1019,8 @@ func applyRemoteMtkWifiAsync(ip string) {
 func mtkLocalApplyWifiCommand() string {
 	return `
 (
-	sleep 1
-
 	if [ -x /sbin/wifi ]; then
-		/sbin/wifi restart
-		exit $?
-	fi
-
-	if [ -x /etc/init.d/network ]; then
-		/etc/init.d/network restart
+		/sbin/wifi reload
 		exit $?
 	fi
 
@@ -594,17 +1032,13 @@ func mtkLocalApplyWifiCommand() string {
 func mtkRemoteApplyWifiCommand(state mtkRadioState) string {
 	return `
 (
-	sleep 1
-
 	if [ -x /sbin/wifi ]; then
-		/sbin/wifi restart
-	elif [ -x /etc/init.d/network ]; then
-		/etc/init.d/network restart
+		/sbin/wifi reload
 	else
 		exit 1
 	fi
 
-	# wifi restart can bring disabled radios back up. Re-apply desired state
+	# wifi reload can bring disabled radios back up. Re-apply desired state
 	# from the AC/main module state file. APs do not store their own state file.
 	sleep 3
 	` + mtkRemoteApplyRadioStateCommand(state) + `
@@ -615,13 +1049,16 @@ func mtkRemoteApplyWifiCommand(state mtkRadioState) string {
 // ---------- 持久化运行时 WiFi 状态 ----------
 //
 // 这个工厂固件中，LuCI 的 enable/disable 行为是运行时 ifconfig ra0/rax0 up/down。
-// /sbin/wifi restart 会再次把 ra0/rax0 拉起来，且 RadioOn=0 不会阻止它。
+// /sbin/wifi reload 会再次把 ra0/rax0 拉起来，且 RadioOn=0 不会阻止它。
 // 所以这里只在 AC/main 模块保存一个总状态文件，并由 AC 后端每 5 秒重新应用：
 //   /etc/roobuck/wifi_state.json
 //
 // AP 不保存状态文件。AP 只接收 AC 下发的 ifconfig ra0/rax0 up/down 命令。
 
-const mtkStateMainKey = "main"
+const (
+	mtkStateVersion = 2
+	mtkStateMainKey = managedMainModuleID
+)
 
 func startMtkWifiStateEnforcer() {
 	mtkStateEnforcerOnce.Do(func() {
@@ -638,6 +1075,11 @@ func startMtkWifiStateEnforcer() {
 }
 
 func enforceAllMtkWifiRadioStates() {
+	if mtkWifiApplyPending.Load() {
+		return
+	}
+
+	registry := discoverManagedAPs(true)
 	centralState := readLocalMtkCentralWifiStateDefault()
 
 	if err := applyLocalMtkRadioState(getMtkRadioStateForModule(centralState, mtkStateMainKey)); err != nil {
@@ -645,20 +1087,20 @@ func enforceAllMtkWifiRadioStates() {
 	}
 
 	var wg sync.WaitGroup
-	for _, ip := range APManagementIPs() {
-		ip := ip
-		state := getMtkRadioStateForModule(centralState, ip)
+	for _, module := range registry {
+		module := module
+		state := getMtkRadioStateForModule(centralState, module.ModuleID)
 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 
-			if !mtkPingOnce(ip) {
+			if !mtkPingOnce(module.IP) {
 				return
 			}
 
-			if err := applyRemoteMtkRadioState(ip, state); err != nil {
-				fmt.Printf("remote MTK radio state enforce failed on %s: %v\n", ip, err)
+			if err := applyRemoteMtkRadioState(module.IP, state); err != nil {
+				fmt.Printf("remote MTK radio state enforce failed on %s (%s): %v\n", module.ModuleID, module.IP, err)
 			}
 		}()
 	}
@@ -675,6 +1117,11 @@ func setMtkWifiRadioStateLogic(req MtkWifiRadioToggleRequest) (MtkWifiRadioToggl
 	mtkMutex.Lock()
 	defer mtkMutex.Unlock()
 
+	if mtkWifiApplyPending.Load() {
+		return MtkWifiRadioToggleResponse{}, fmt.Errorf("WiFi apply is in progress")
+	}
+
+	req.ModuleID = strings.ToLower(strings.TrimSpace(req.ModuleID))
 	req.Type = strings.TrimSpace(req.Type)
 	req.IP = strings.TrimSpace(req.IP)
 	req.Band = strings.ToLower(strings.TrimSpace(req.Band))
@@ -683,8 +1130,34 @@ func setMtkWifiRadioStateLogic(req MtkWifiRadioToggleRequest) (MtkWifiRadioToggl
 		return MtkWifiRadioToggleResponse{}, fmt.Errorf("invalid band: %s", req.Band)
 	}
 
-	key := mtkModuleStateKey(req.Type, req.IP)
-	target := mtkResultTarget(req.Name, req.Type, req.IP, apPortIndexByIP())
+	key := managedMainModuleID
+	target := "Router"
+	currentAP := ManagedModule{}
+	hasCurrentAP := false
+
+	if req.Type != "main" && req.ModuleID != managedMainModuleID {
+		registry := discoverManagedAPs(true)
+
+		if req.ModuleID != "" {
+			if _, ok := managedAntennaPortIndex(req.ModuleID); !ok {
+				return MtkWifiRadioToggleResponse{}, fmt.Errorf("invalid antenna identity")
+			}
+			key = req.ModuleID
+			currentAP, hasCurrentAP = managedAPByModuleID(registry, key)
+		} else {
+			// Backward compatibility for a briefly mixed frontend/backend upgrade:
+			// convert the old IP field to a stable port identity before saving.
+			managed, err := resolveMtkManagedAP("", req.IP, registry)
+			if err != nil {
+				return MtkWifiRadioToggleResponse{}, err
+			}
+			currentAP = managed
+			hasCurrentAP = true
+			key = managed.ModuleID
+		}
+
+		target = mtkResultTargetForModuleID(key, req.Name)
+	}
 
 	centralState, err := readLocalMtkCentralWifiState()
 	if err != nil {
@@ -699,7 +1172,7 @@ func setMtkWifiRadioStateLogic(req MtkWifiRadioToggleRequest) (MtkWifiRadioToggl
 		return MtkWifiRadioToggleResponse{}, err
 	}
 
-	if key == mtkStateMainKey {
+	if key == managedMainModuleID {
 		err := applyLocalMtkRadioState(moduleState)
 		runtime := getLocalMtkRadioRuntimeStatus()
 
@@ -716,7 +1189,7 @@ func setMtkWifiRadioStateLogic(req MtkWifiRadioToggleRequest) (MtkWifiRadioToggl
 		}, nil
 	}
 
-	if !mtkPingOnce(req.IP) {
+	if !hasCurrentAP || !mtkPingOnce(currentAP.IP) {
 		return MtkWifiRadioToggleResponse{
 			Status: "ok",
 			Result: MtkWifiSyncResult{
@@ -730,10 +1203,10 @@ func setMtkWifiRadioStateLogic(req MtkWifiRadioToggleRequest) (MtkWifiRadioToggl
 		}, nil
 	}
 
-	err = applyRemoteMtkRadioState(req.IP, moduleState)
-	runtime := getRemoteMtkRadioRuntimeStatus(req.IP)
+	err = applyRemoteMtkRadioState(currentAP.IP, moduleState)
+	runtime := getRemoteMtkRadioRuntimeStatus(currentAP.IP)
 	if err != nil {
-		fmt.Printf("[MTK WiFi] radio state apply failed for %s (%s): %v\n", target, req.IP, err)
+		fmt.Printf("[MTK WiFi] radio state apply failed for %s (%s): %v\n", target, currentAP.IP, err)
 	}
 
 	return MtkWifiRadioToggleResponse{
@@ -760,7 +1233,7 @@ func defaultMtkRadioState() mtkRadioState {
 func defaultMtkCentralWifiState() mtkCentralWifiState {
 	now := time.Now().Unix()
 	state := mtkCentralWifiState{
-		Version:   1,
+		Version:   mtkStateVersion,
 		Modules:   map[string]mtkRadioState{},
 		UpdatedAt: now,
 	}
@@ -771,8 +1244,8 @@ func defaultMtkCentralWifiState() mtkCentralWifiState {
 		UpdatedAt:      now,
 	}
 
-	for _, ip := range APManagementIPs() {
-		state.Modules[ip] = mtkRadioState{
+	for portIndex := 1; portIndex <= len(APManagementIPs()); portIndex++ {
+		state.Modules[managedAntennaModuleID(portIndex)] = mtkRadioState{
 			Radio24Enabled: true,
 			Radio5Enabled:  true,
 			UpdatedAt:      now,
@@ -793,17 +1266,6 @@ func setBandInMtkRadioState(state mtkRadioState, band string, enabled bool) mtkR
 	return state
 }
 
-func mtkModuleStateKey(moduleType string, ip string) string {
-	moduleType = strings.TrimSpace(moduleType)
-	ip = strings.TrimSpace(ip)
-
-	if moduleType == "main" || ip == "" {
-		return mtkStateMainKey
-	}
-
-	return ip
-}
-
 func readLocalMtkCentralWifiStateDefault() mtkCentralWifiState {
 	state, err := readLocalMtkCentralWifiState()
 	if err != nil {
@@ -814,26 +1276,26 @@ func readLocalMtkCentralWifiStateDefault() mtkCentralWifiState {
 }
 
 func readLocalMtkCentralWifiState() (mtkCentralWifiState, error) {
-	state := defaultMtkCentralWifiState()
-
 	b, err := os.ReadFile(MtkWifiStatePath)
 	if err != nil {
-		return state, err
+		return defaultMtkCentralWifiState(), err
 	}
 
+	var state mtkCentralWifiState
 	if err := json.Unmarshal(b, &state); err != nil {
 		return defaultMtkCentralWifiState(), err
 	}
 
-	return sanitizeMtkCentralWifiState(state), nil
+	return prepareMtkCentralWifiState(state, apPortIndexByIP()), nil
 }
 
 func writeLocalMtkCentralWifiState(state mtkCentralWifiState) error {
-	if err := os.MkdirAll("/etc/roobuck", 0755); err != nil {
+	dir := filepath.Dir(MtkWifiStatePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
 
-	state = sanitizeMtkCentralWifiState(state)
+	state = prepareMtkCentralWifiState(state, apPortIndexByIP())
 	state.UpdatedAt = time.Now().Unix()
 
 	b, err := json.MarshalIndent(state, "", "  ")
@@ -841,26 +1303,80 @@ func writeLocalMtkCentralWifiState(state mtkCentralWifiState) error {
 		return err
 	}
 
-	return os.WriteFile(MtkWifiStatePath, append(b, '\n'), 0644)
-}
+	tmp, err := os.CreateTemp(dir, ".wifi_state-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
 
-func sanitizeMtkCentralWifiState(state mtkCentralWifiState) mtkCentralWifiState {
-	if state.Version == 0 {
-		state.Version = 1
+	if err := tmp.Chmod(0644); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(append(b, '\n')); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
 	}
 
+	return os.Rename(tmpPath, MtkWifiStatePath)
+}
+
+// prepareMtkCentralWifiState migrates the old IP-keyed v1 format to stable
+// antenna:N keys. Unresolved legacy entries are retained until ARP/FDB can
+// prove their physical port; they are never applied based on IP alone.
+func prepareMtkCentralWifiState(state mtkCentralWifiState, portByIP map[string]int) mtkCentralWifiState {
 	if state.Modules == nil {
 		state.Modules = map[string]mtkRadioState{}
 	}
+	if state.LegacyIPStates == nil {
+		state.LegacyIPStates = map[string]mtkRadioState{}
+	}
+
+	for key, moduleState := range state.Modules {
+		if !IsManagedAPIP(key) {
+			continue
+		}
+
+		delete(state.Modules, key)
+		if stableKey := managedAntennaModuleID(portByIP[key]); stableKey != "" {
+			if _, exists := state.Modules[stableKey]; !exists {
+				state.Modules[stableKey] = moduleState
+			}
+			continue
+		}
+		state.LegacyIPStates[key] = moduleState
+	}
+
+	for ip, moduleState := range state.LegacyIPStates {
+		stableKey := managedAntennaModuleID(portByIP[ip])
+		if stableKey == "" {
+			continue
+		}
+		// A retained legacy value is an actual user choice; any stable entry
+		// created while the AP was unidentifiable was only a default.
+		state.Modules[stableKey] = moduleState
+		delete(state.LegacyIPStates, ip)
+	}
+
+	state.Version = mtkStateVersion
 
 	// Make sure all managed modules have a state. Missing entries default to enabled.
 	if _, ok := state.Modules[mtkStateMainKey]; !ok {
 		state.Modules[mtkStateMainKey] = defaultMtkRadioState()
 	}
 
-	for _, ip := range APManagementIPs() {
-		if _, ok := state.Modules[ip]; !ok {
-			state.Modules[ip] = defaultMtkRadioState()
+	for portIndex := 1; portIndex <= len(APManagementIPs()); portIndex++ {
+		key := managedAntennaModuleID(portIndex)
+		if _, ok := state.Modules[key]; !ok {
+			state.Modules[key] = defaultMtkRadioState()
 		}
 	}
 
@@ -872,7 +1388,6 @@ func sanitizeMtkCentralWifiState(state mtkCentralWifiState) mtkCentralWifiState 
 }
 
 func getMtkRadioStateForModule(state mtkCentralWifiState, key string) mtkRadioState {
-	state = sanitizeMtkCentralWifiState(state)
 	key = strings.TrimSpace(key)
 	if key == "" {
 		key = mtkStateMainKey
@@ -920,7 +1435,7 @@ func applyLocalMtkRadioState(state mtkRadioState) error {
 	}
 
 	if len(errs) > 0 {
-		return fmt.Errorf(strings.Join(errs, "; "))
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
 	}
 
 	return nil
@@ -1172,6 +1687,7 @@ func normalizeMtkWifiRequest(req *MtkWifiInfo) {
 	req.SSID5 = strings.TrimSpace(req.SSID5)
 
 	for i := range req.Modules {
+		req.Modules[i].ModuleID = strings.ToLower(strings.TrimSpace(req.Modules[i].ModuleID))
 		req.Modules[i].Channel24 = strings.TrimSpace(req.Modules[i].Channel24)
 		req.Modules[i].ChannelWidth24 = strings.TrimSpace(req.Modules[i].ChannelWidth24)
 		req.Modules[i].Channel5 = strings.TrimSpace(req.Modules[i].Channel5)
@@ -1197,8 +1713,14 @@ func validateMtkWifiRequest(req MtkWifiInfo) error {
 	mainCount := 0
 
 	for _, mod := range req.Modules {
-		if mod.Type == "main" {
+		if mod.Type == "main" || mod.ModuleID == managedMainModuleID {
 			mainCount++
+		} else if mod.ModuleID != "" {
+			if _, ok := managedAntennaPortIndex(mod.ModuleID); !ok {
+				return fmt.Errorf("%s has invalid antenna identity", nonEmpty(mod.Name, "module"))
+			}
+		} else if !IsManagedAPIP(mod.IP) {
+			return fmt.Errorf("%s has invalid antenna address", nonEmpty(mod.Name, "module"))
 		}
 
 		name := mod.Name
@@ -1596,8 +2118,11 @@ func sortMtkModules(modules []MtkWifiModuleRadio) {
 }
 
 func mtkModuleSortKey(m MtkWifiModuleRadio) int {
-	if m.Type == "main" {
+	if m.Type == "main" || m.ModuleID == managedMainModuleID {
 		return 0
+	}
+	if portIndex, ok := managedAntennaPortIndex(m.ModuleID); ok {
+		return portIndex
 	}
 
 	parts := strings.Split(m.IP, ".")

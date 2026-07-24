@@ -20,6 +20,7 @@ export type ConfirmOptions = {
   confirmText?: string
   cancelText?: string
   destructive?: boolean
+  alertOnly?: boolean
 }
 
 type ConfirmState = {
@@ -70,16 +71,14 @@ export function ConfirmHost() {
           ) : null}
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel onClick={() => settle(false)}>
-            {options.cancelText ?? 'Cancel'}
-          </AlertDialogCancel>
+          {!options.alertOnly ? (
+            <AlertDialogCancel onClick={() => settle(false)}>
+              {options.cancelText ?? 'Cancel'}
+            </AlertDialogCancel>
+          ) : null}
           <AlertDialogAction
+            variant={options.destructive ? 'destructive' : 'default'}
             onClick={() => settle(true)}
-            className={
-              options.destructive
-                ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
-                : undefined
-            }
           >
             {options.confirmText ?? 'Confirm'}
           </AlertDialogAction>
