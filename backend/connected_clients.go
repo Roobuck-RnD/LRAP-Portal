@@ -167,15 +167,7 @@ func connectedClientsHandler(w http.ResponseWriter, r *http.Request) {
 // that is up but has no successfully queried AP means collection is recovering;
 // it must never be reported to the UI as a genuine zero-client result.
 func ccExpectedAntennaCount() int {
-	count := 0
-	for portIndex := 1; portIndex <= len(APManagementIPs()); portIndex++ {
-		carrierPath := fmt.Sprintf("/sys/class/net/lan%d/carrier", portIndex)
-		raw, err := os.ReadFile(carrierPath)
-		if err == nil && strings.TrimSpace(string(raw)) == "1" {
-			count++
-		}
-	}
-	return count
+	return len(managedAntennaLinkedPortIndexes())
 }
 
 // ---------- Main Module ----------

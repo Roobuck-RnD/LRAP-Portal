@@ -932,7 +932,7 @@ WARNING: Changing the subnet mask, DHCP, gateway, or DNS may temporarily disconn
 
                           {iface.id === 'lan' && iface.dhcp && (
                             <div>
-                              <span className="font-semibold text-foreground">DHCP Server:</span>{' '}
+                              <span className="font-semibold text-foreground">Client DHCP Server:</span>{' '}
                               {iface.dhcp.enabled ? 'Enabled' : 'Disabled'}
                             </div>
                           )}
@@ -1061,6 +1061,10 @@ WARNING: Changing the subnet mask, DHCP, gateway, or DNS may temporarily disconn
                               {ap.online ? (
                                 <span className="rounded bg-success/15 px-2 py-1 text-xs text-success">
                                   Online
+                                </span>
+                              ) : ap.error === 'identification pending' ? (
+                                <span className="rounded bg-warning/15 px-2 py-1 text-xs text-warning">
+                                  Detecting
                                 </span>
                               ) : (
                                 <span className="rounded bg-destructive/15 px-2 py-1 text-xs text-destructive">
@@ -1198,7 +1202,7 @@ WARNING: Changing the subnet mask, DHCP, gateway, or DNS may temporarily disconn
                     variant={editTab === 'dhcp' ? 'secondary' : 'ghost'}
                     onClick={() => setEditTab('dhcp')}
                   >
-                    DHCP Server
+                    Client DHCP
                   </Button>
                 )}
               </div>
@@ -1318,9 +1322,10 @@ WARNING: Changing the subnet mask, DHCP, gateway, or DNS may temporarily disconn
                 <>
                   <Label className="flex items-center justify-between gap-3 rounded border p-3">
                     <div>
-                      <div className="font-medium text-foreground">Enable DHCP Server</div>
+                      <div className="font-medium text-foreground">Enable Client DHCP Server</div>
                       <div className="text-xs text-muted-foreground">
-                        When disabled, this interface will not serve DHCP leases.
+                        Controls address assignment for connected client devices. Internal device
+                        management remains available.
                       </div>
                     </div>
                     <Switch checked={editDHCPEnabled} onCheckedChange={setEditDHCPEnabled} />
@@ -1368,7 +1373,7 @@ WARNING: Changing the subnet mask, DHCP, gateway, or DNS may temporarily disconn
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <Label className="flex items-center gap-2 rounded border p-3">
                       <Switch checked={editDHCPDynamic} onCheckedChange={setEditDHCPDynamic} disabled={!editDHCPEnabled} />
-                      Dynamic DHCP
+                      Dynamic Client DHCP
                     </Label>
 
                     <Label className="flex items-center gap-2 rounded border p-3">

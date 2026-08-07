@@ -138,3 +138,27 @@ func TestIfaceSortAPManagementUsesAntennaIdentity(t *testing.T) {
 		}
 	}
 }
+
+func TestIfaceDHCPSettingsFromValuesSeparatesClientSwitchFromProtectedPool(t *testing.T) {
+	t.Run("legacy enabled configuration remains enabled", func(t *testing.T) {
+		got := ifaceDHCPSettingsFromValues(map[string]any{
+			"ignore":      "0",
+			"dynamicdhcp": "1",
+		})
+		if !got.Enabled || !got.DynamicDHCP {
+			t.Fatalf("legacy settings = enabled %v dynamic %v, want true true", got.Enabled, got.DynamicDHCP)
+		}
+	})
+
+	t.Run("disabled client pool preserves requested dynamic preference", func(t *testing.T) {
+		got := ifaceDHCPSettingsFromValues(map[string]any{
+			"ignore":                  "0",
+			"dynamicdhcp":             "0",
+			"lrap_client_enabled":     "0",
+			"lrap_client_dynamicdhcp": "1",
+		})
+		if got.Enabled || !got.DynamicDHCP {
+			t.Fatalf("client settings = enabled %v dynamic %v, want false true", got.Enabled, got.DynamicDHCP)
+		}
+	})
+}

@@ -227,25 +227,34 @@ func setSystemGeneral(r *http.Request, req SystemConfigReq) (SystemConfigSaveRes
 	// 2. APs: sync timezone only, keep AP hostnames unchanged.
 	// 面向用户的 warning 用按口编号的显示名(Antenna<N>),不暴露 AP 的 IP/多模块架构;
 	// 带 IP 的详细错误只写服务端日志。portByIP 在起 goroutine 前算好,循环里只读。
-	apIPs := APManagementIPs()
-	portByIP := apPortIndexByIP()
+	registry := discoverManagedAPs(true)
+	modulesByPort := managedAntennaModulesByPort(registry)
+	activePorts := currentManagedAntennaPortIndexes(registry)
 	warnings := make([]string, 0)
+	activeModules := make([]ManagedModule, 0, len(activePorts))
 	synced := 0
+	for _, portIndex := range activePorts {
+		if module, resolved := modulesByPort[portIndex]; resolved {
+			activeModules = append(activeModules, module)
+		} else {
+			warnings = append(warnings, fmt.Sprintf("Antenna%d: identification is not ready", portIndex))
+		}
+	}
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
-	for _, ip := range apIPs {
-		targetIP := ip
+	for _, module := range activeModules {
+		module := module
 
 		wg.Add(1)
 
 		go func() {
 			defer wg.Done()
 
-			if err := syncTimezoneToAP(targetIP, zonename, timezonePosix); err != nil {
-				name := apDisplayName("Antenna", portByIP[targetIP])
-				log.Printf("timezone sync failed for %s (%s): %v", name, targetIP, err)
+			if err := syncTimezoneToAP(module.IP, zonename, timezonePosix); err != nil {
+				name := apDisplayName("Antenna", module.PortIndex)
+				log.Printf("timezone sync failed for %s (%s): %v", name, module.IP, err)
 				mu.Lock()
 				warnings = append(warnings, fmt.Sprintf("%s: could not apply timezone", name))
 				mu.Unlock()

@@ -558,12 +558,22 @@ func ifaceDHCPSettingsFromValues(values map[string]any) *InterfaceDHCPSettings {
 		}
 	}
 
+	enabled := !ifaceBoolUCI(values["ignore"], false)
+	if _, exists := values["lrap_client_enabled"]; exists {
+		enabled = ifaceBoolUCI(values["lrap_client_enabled"], enabled)
+	}
+
+	dynamicDHCP := ifaceBoolUCI(values["dynamicdhcp"], true)
+	if _, exists := values["lrap_client_dynamicdhcp"]; exists {
+		dynamicDHCP = ifaceBoolUCI(values["lrap_client_dynamicdhcp"], dynamicDHCP)
+	}
+
 	return &InterfaceDHCPSettings{
-		Enabled:     !ifaceBoolUCI(values["ignore"], false),
+		Enabled:     enabled,
 		Start:       ifaceStringDefault(values["start"], "100"),
 		Limit:       ifaceStringDefault(values["limit"], "150"),
 		LeaseTime:   ifaceStringDefault(values["leasetime"], "12h"),
-		DynamicDHCP: ifaceBoolUCI(values["dynamicdhcp"], true),
+		DynamicDHCP: dynamicDHCP,
 		Force:       ifaceBoolUCI(values["force"], false),
 		DHCPOptions: ifaceValueToList(values["dhcp_option"]),
 	}
@@ -611,23 +621,19 @@ func ifaceUpdateLanDHCP(localSid string, netmask string, req *InterfaceDHCPReq) 
 		return fmt.Errorf("dhcp start, limit and lease time are required")
 	}
 
-	ignore := "0"
-	if !req.Enabled {
-		ignore = "1"
-	}
-
 	_, err := ubusCallJSONLocal(localSid, "uci", "set", map[string]any{
 		"config":  "dhcp",
 		"section": "lan",
 		"values": map[string]string{
-			"interface":   "lan",
-			"ignore":      ignore,
-			"start":       start,
-			"limit":       limit,
-			"leasetime":   leasetime,
-			"dynamicdhcp": ifaceBoolToUCI(req.DynamicDHCP),
-			"force":       ifaceBoolToUCI(req.Force),
-			"tag":         "!rbap",
+			"interface":               "lan",
+			"ignore":                  "0",
+			"start":                   start,
+			"limit":                   limit,
+			"leasetime":               leasetime,
+			"lrap_client_enabled":     ifaceBoolToUCI(req.Enabled),
+			"lrap_client_dynamicdhcp": ifaceBoolToUCI(req.DynamicDHCP),
+			"dynamicdhcp":             ifaceBoolToUCI(req.Enabled && req.DynamicDHCP),
+			"force":                   ifaceBoolToUCI(req.Force),
 		},
 	})
 	if err != nil {
@@ -652,6 +658,14 @@ func ifaceUpdateLanDHCP(localSid string, netmask string, req *InterfaceDHCPReq) 
 
 	if err := exec.Command("sh", "-c", strings.Join(cmdParts, "; ")).Run(); err != nil {
 		return fmt.Errorf("uci set dhcp options failed: %v", err)
+	}
+
+	// Keep the ordinary client pool and the internal Antenna pool mutually
+	// exclusive. OpenWrt requires range tags to be UCI list values; writing
+	// "tag" in the ubus values map above would turn it into a scalar option and
+	// dnsmasq would silently expose the ordinary pool to Antennas.
+	if _, err := ensureProtectedDHCPConfig(false, false); err != nil {
+		return fmt.Errorf("protect internal Antenna DHCP pool failed: %v", err)
 	}
 
 	return nil
@@ -1221,29 +1235,34 @@ uci commit firewall
 // ---------- AP Management Read-only ----------
 
 func ifaceGetAPManagementList() []APManagementInfo {
-	ips := APManagementIPs()
+	registry := discoverManagedAPs(true)
 	// 按物理口给稳定显示名(Antenna<N>),而不是暴露 AP 真实 hostname。
 	// portByIP 在起 goroutine 前算好,循环里只读。
-	portByIP := apPortIndexByIP()
-	results := make([]APManagementInfo, 0, len(ips))
+	modulesByPort := managedAntennaModulesByPort(registry)
+	activePorts := currentManagedAntennaPortIndexes(registry)
+	results := make([]APManagementInfo, len(activePorts))
 
 	var wg sync.WaitGroup
-	var mu sync.Mutex
-
-	for _, ip := range ips {
-		ip := ip
-		portN := portByIP[ip]
+	for index, portIndex := range activePorts {
+		index := index
+		portIndex := portIndex
+		module, resolved := modulesByPort[portIndex]
+		if !resolved {
+			results[index] = APManagementInfo{
+				Name:         apDisplayName("Antenna", portIndex),
+				AntennaIndex: portIndex,
+				Online:       false,
+				Error:        "identification pending",
+			}
+			continue
+		}
 
 		wg.Add(1)
 
 		go func() {
 			defer wg.Done()
 
-			info := ifaceGetSingleAPManagement(ip, portN)
-
-			mu.Lock()
-			results = append(results, info)
-			mu.Unlock()
+			results[index] = ifaceGetSingleAPManagement(module.IP, portIndex)
 		}()
 	}
 
