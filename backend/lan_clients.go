@@ -276,8 +276,7 @@ func lanClientsHandler(w http.ResponseWriter, r *http.Request) {
 	// sid 来自请求 Bearer(接口已由 withAuth 保证存在)。
 
 	// 2) 主动探测静态 AP IP，并等待 ping 完成
-	apIPs := APManagementIPs()
-	probeStaticIPs(apIPs)
+	registry := discoverManagedAPs(true)
 
 	// 3) 主模块自己
 	main := LanClient{
@@ -301,36 +300,27 @@ func lanClientsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 4) 读取 ARP 和 FDB
-	arpByIP := parseARPByIP()
-	portByMAC := listLanEdgePortsByMAC()
 
 	// 5) 组装返回
-	finalOut := make([]LanClient, 0, 1+len(apIPs))
+	finalOut := make([]LanClient, 0, 1+len(registry))
 	finalOut = append(finalOut, main)
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
-	for _, ip := range apIPs {
-		mac, online := arpByIP[ip]
-		if !online {
+	for _, module := range registry {
+		if !ifacePingOnce(module.IP) {
 			// 按你的要求，离线 AP 不返回
 			continue
 		}
 
-		port := portByMAC[mac]
-		if port == "" {
-			port = "unknown"
-		}
-		portN := lanPortNumber(port)
-
 		client := LanClient{
-			ModuleID: managedAntennaModuleID(portN),
-			Port:     port,
-			MAC:      mac,
-			IP:       ip,
+			ModuleID: module.ModuleID,
+			Port:     module.Port,
+			MAC:      module.MAC,
+			IP:       module.IP,
 			// 显示名按物理口编号(RoobuckAP1..4),稳定不随 IP 变;设备真实 hostname 不改。
-			Hostname: apDisplayName("RoobuckAP", portN),
+			Hostname: apDisplayName("RoobuckAP", module.PortIndex),
 			Type:     "ap",
 			Online:   true,
 		}
@@ -351,7 +341,7 @@ func lanClientsHandler(w http.ResponseWriter, r *http.Request) {
 			mu.Lock()
 			finalOut[targetIdx].Hostname = apDisplayName(realName, pN)
 			mu.Unlock()
-		}(idx, portN, ip)
+		}(idx, module.PortIndex, module.IP)
 	}
 
 	wg.Wait()

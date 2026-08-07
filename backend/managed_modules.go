@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +22,90 @@ type ManagedModule struct {
 	PortIndex int
 	IP        string
 	MAC       string
+}
+
+// managedAntennaLinkedPortIndexes returns only physical Antenna uplinks whose
+// carrier is currently up. Empty lan ports are capacity, not installed modules.
+func managedAntennaCarrierByPort() map[int]bool {
+	carrierByPort := make(map[int]bool, len(APManagementIPs()))
+	for portIndex := 1; portIndex <= len(APManagementIPs()); portIndex++ {
+		carrierPath := "/sys/class/net/lan" + strconv.Itoa(portIndex) + "/carrier"
+		raw, err := os.ReadFile(carrierPath)
+		if err == nil {
+			carrierByPort[portIndex] = strings.TrimSpace(string(raw)) == "1"
+		}
+	}
+	return carrierByPort
+}
+
+func managedAntennaLinkedPortIndexes() []int {
+	ports := make([]int, 0, len(APManagementIPs()))
+	for portIndex, linked := range managedAntennaCarrierByPort() {
+		if linked {
+			ports = append(ports, portIndex)
+		}
+	}
+	sort.Ints(ports)
+	return ports
+}
+
+// managedAntennaPortIndexes merges carrier-up ports with modules whose
+// physical identity was already proven. The union avoids losing a real module
+// because of a transient carrier-file read while still excluding empty ports.
+func managedAntennaPortIndexes(linkedPorts []int, modules []ManagedModule) []int {
+	seen := make(map[int]bool, len(linkedPorts)+len(modules))
+	for _, portIndex := range linkedPorts {
+		if portIndex >= 1 && portIndex <= len(APManagementIPs()) {
+			seen[portIndex] = true
+		}
+	}
+	for _, module := range modules {
+		if module.PortIndex >= 1 && module.PortIndex <= len(APManagementIPs()) {
+			seen[module.PortIndex] = true
+		}
+	}
+
+	ports := make([]int, 0, len(seen))
+	for portIndex := range seen {
+		ports = append(ports, portIndex)
+	}
+	sort.Ints(ports)
+	return ports
+}
+
+func managedAntennaPortIndexesFromCarrier(carrierByPort map[int]bool, modules []ManagedModule) []int {
+	linkedPorts := make([]int, 0, len(carrierByPort))
+	fallbackModules := make([]ManagedModule, 0, len(modules))
+	for portIndex, linked := range carrierByPort {
+		if linked {
+			linkedPorts = append(linkedPorts, portIndex)
+		}
+	}
+	for _, module := range modules {
+		// A known carrier-down port is empty/offline even if ARP/FDB still has a
+		// stale entry. Fall back to the proven module only when sysfs is unreadable.
+		if _, carrierKnown := carrierByPort[module.PortIndex]; !carrierKnown {
+			fallbackModules = append(fallbackModules, module)
+		}
+	}
+	return managedAntennaPortIndexes(linkedPorts, fallbackModules)
+}
+
+func currentManagedAntennaPortIndexes(modules []ManagedModule) []int {
+	return managedAntennaPortIndexesFromCarrier(managedAntennaCarrierByPort(), modules)
+}
+
+func managedAntennaModulesByPort(modules []ManagedModule) map[int]ManagedModule {
+	byPort := make(map[int]ManagedModule, len(modules))
+	for _, module := range modules {
+		if module.PortIndex < 1 || module.PortIndex > len(APManagementIPs()) {
+			continue
+		}
+		if _, exists := byPort[module.PortIndex]; !exists {
+			byPort[module.PortIndex] = module
+		}
+	}
+	return byPort
 }
 
 func managedAntennaModuleID(portIndex int) string {

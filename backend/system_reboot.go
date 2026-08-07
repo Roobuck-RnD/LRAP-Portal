@@ -73,31 +73,41 @@ func rebootRemoteAP(ip string) error {
 }
 
 func rebootAllModules() RebootAllResponse {
-	apIPs := APManagementIPs()
+	registry := discoverManagedAPs(true)
+	modulesByPort := managedAntennaModulesByPort(registry)
+	activePorts := currentManagedAntennaPortIndexes(registry)
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
-	targets := make([]string, 0, len(apIPs)+1)
+	activeModules := make([]ManagedModule, 0, len(activePorts))
+	targets := make([]string, 0, len(activePorts)+1)
 	warnings := make([]string, 0)
+	for _, portIndex := range activePorts {
+		if module, resolved := modulesByPort[portIndex]; resolved {
+			activeModules = append(activeModules, module)
+		} else {
+			warnings = append(warnings, fmt.Sprintf("Antenna%d: identification is not ready", portIndex))
+		}
+	}
 
-	for _, ip := range apIPs {
-		ip := ip
+	for _, module := range activeModules {
+		module := module
 
 		wg.Add(1)
 
 		go func() {
 			defer wg.Done()
 
-			if err := rebootRemoteAP(ip); err != nil {
+			if err := rebootRemoteAP(module.IP); err != nil {
 				mu.Lock()
-				warnings = append(warnings, fmt.Sprintf("%s: %v", ip, err))
+				warnings = append(warnings, fmt.Sprintf("Antenna%d: %v", module.PortIndex, err))
 				mu.Unlock()
 				return
 			}
 
 			mu.Lock()
-			targets = append(targets, ip)
+			targets = append(targets, apDisplayName("Antenna", module.PortIndex))
 			mu.Unlock()
 		}()
 	}

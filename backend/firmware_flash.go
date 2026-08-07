@@ -390,9 +390,19 @@ func firmwareStartBundleUpgradeJob(r *http.Request, uploadedPath string, keepSet
 		},
 	}
 
-	// Bundle upgrades in this product target the fixed AP management range.
-	// The UI may miss an AP while it is rebooting or absent from ARP, so do not
-	// depend only on the frontend-discovered module list. Always include 10.10.18.2-5.
+	// The protected .2-.5 range is discovery capacity, not the installed module
+	// count. Snapshot carrier-up/proven physical ports so a 1-4 Antenna product
+	// upgrades every installed module without waiting for empty LAN ports.
+	registry := discoverManagedAPs(true)
+	expectedPorts := currentManagedAntennaPortIndexes(registry)
+	if len(expectedPorts) == 0 {
+		_ = os.Remove(bundle.MainPath)
+		_ = os.Remove(bundle.SubPath)
+		return FirmwareFlashResponse{}, fmt.Errorf("no installed antenna targets found")
+	}
+
+	// Probe the complete protected range because an installed Antenna may be
+	// between DHCP addresses while the job is starting.
 	targetIPs := firmwareMergeIPs(APManagementIPs(), requestedTargetIPs)
 
 	if len(targetIPs) == 0 {
@@ -412,12 +422,12 @@ func firmwareStartBundleUpgradeJob(r *http.Request, uploadedPath string, keepSet
 
 	jobID, resp := firmwareCreateUpgradeJob("bundle", bundle.Version, "Package accepted. Antenna upgrade is running in the background.", results)
 
-	go firmwareRunBundleUpgradeJob(jobID, bundle, downloadURL, keepSettings, targetIPs)
+	go firmwareRunBundleUpgradeJob(jobID, bundle, downloadURL, keepSettings, targetIPs, expectedPorts)
 
 	return resp, nil
 }
 
-func firmwareRunBundleUpgradeJob(jobID string, bundle firmwareUnpackedBundle, downloadURL string, keepSettings bool, targetIPs []string) {
+func firmwareRunBundleUpgradeJob(jobID string, bundle firmwareUnpackedBundle, downloadURL string, keepSettings bool, targetIPs []string, expectedPorts []int) {
 	acStarted := false
 
 	defer func() {
@@ -431,6 +441,47 @@ func firmwareRunBundleUpgradeJob(jobID string, bundle firmwareUnpackedBundle, do
 			_ = os.Remove(bundle.MainPath)
 		}
 	}()
+
+	firmwareUpdateJob(jobID, "running", "Checking protected Antenna DHCP addressing before firmware precheck.", true, false)
+	configChanged, configErr := ensureProtectedDHCPConfig(true, true)
+	if configErr != nil {
+		firmwareAppendJobResult(jobID, FirmwareFlashResult{
+			Role: "dhcp", Stage: "protect", Status: "failed", OK: false, Error: configErr.Error(),
+		})
+		firmwareUpdateJob(jobID, "failed", "Protected Antenna DHCP configuration could not be verified. Firmware was not flashed.", false, true)
+		return
+	}
+	if configChanged {
+		firmwareAppendJobResult(jobID, FirmwareFlashResult{
+			Role: "dhcp", Stage: "protect", Status: "ok", OK: true,
+			Detail: "Repaired the internal Antenna/client DHCP range tags and restarted dnsmasq.",
+		})
+	}
+
+	reconciled, reconcileErr := reconcileManagedAntennaDHCPDrift(protectedDHCPReconcileTimeout)
+	if reconcileErr != nil {
+		firmwareAppendJobResult(jobID, FirmwareFlashResult{
+			Role: "dhcp", Stage: "reconcile", Status: "failed", OK: false, Error: reconcileErr.Error(),
+		})
+		firmwareUpdateJob(jobID, "failed", "An Antenna address could not be returned to the protected management pool. Firmware was not flashed.", false, true)
+		return
+	}
+	if reconciled > 0 {
+		firmwareAppendJobResult(jobID, FirmwareFlashResult{
+			Role: "dhcp", Stage: "reconcile", Status: "ok", OK: true,
+			Detail: fmt.Sprintf("Returned %d Antenna lease(s) to the protected 10.10.18.2-5 pool.", reconciled),
+		})
+	}
+
+	resolvedTargets, resolveErr := firmwareWaitForManagedTargetsByPhysicalPort(targetIPs, expectedPorts, protectedDHCPReconcileTimeout)
+	if resolveErr != nil {
+		firmwareAppendJobResult(jobID, FirmwareFlashResult{
+			Role: "sub", Stage: "precheck", Status: "failed", OK: false, Error: resolveErr.Error(),
+		})
+		firmwareUpdateJob(jobID, "failed", "Not all physical Antenna ports could be resolved to protected management addresses. Firmware was not flashed.", false, true)
+		return
+	}
+	targetIPs = resolvedTargets
 
 	firmwareUpdateJob(jobID, "running", "Prechecking antennas with ping and ubus before firmware dispatch.", true, false)
 
@@ -474,9 +525,6 @@ func firmwareRunBundleUpgradeJob(jobID string, bundle firmwareUnpackedBundle, do
 		return
 	}
 
-	cleanupIPs := firmwareAPIPsFromStates(states)
-	cleanupMACs := firmwareAPMACsFromStates(states)
-
 	// Important timing fix:
 	// Do not clear the AP DHCP leases immediately after dispatch. The AP worker sleeps
 	// before wget/sysupgrade so /ubus can return cleanly. If dnsmasq is restarted while
@@ -488,13 +536,13 @@ func firmwareRunBundleUpgradeJob(jobID string, bundle firmwareUnpackedBundle, do
 	firmwareAppendJobResult(jobID, fwCleanupWaitResult)
 
 	firmwareUpdateJob(jobID, "running", "Clearing old DHCP leases after antennas entered the upgrade/reboot window.", true, false)
-	removedLeases, cleanupErr := firmwareClearLocalDHCPLeasesForIPsAndMACs(cleanupIPs, cleanupMACs)
+	removedLeases, cleanupErr := firmwareClearCapturedAntennaLeases(states)
 	cleanupResult := FirmwareFlashResult{
 		Role:   "dhcp",
 		Stage:  "cleanup",
 		Status: "ok",
 		OK:     true,
-		Detail: fmt.Sprintf("Removed %d lease record(s) for IPs %s and old MACs %s after dispatch wait. %s Restarted dnsmasq.", removedLeases, strings.Join(cleanupIPs, ", "), firmwareJoinOrNone(cleanupMACs), firmwareCleanupWaitDetail),
+		Detail: fmt.Sprintf("Removed %d stale pre-upgrade Antenna lease record(s). New reachable leases were preserved. %s Restarted dnsmasq.", removedLeases, firmwareCleanupWaitDetail),
 	}
 	if cleanupErr != nil {
 		cleanupResult.Status = "failed"
@@ -908,6 +956,7 @@ func firmwarePrecheckAPsAndUpdateJob(jobID string, targetIPs []string) ([]firmwa
 //   - 若池已满且有"持续不可达、且未验证"的 leased IP → 判为疑似鬼影,限频清掉其租约,
 //     腾出格子让被锁住的 AP 重新拿 IP。(复用已验证的 firmwareClearLocalDHCPLeasesForIPs。)
 //   - 到 timeout 仍不足 expected → 失败(真变砖也走这条,不会误判成功)。
+//
 // 返回值语义与调用方一致:全 OK 表示成功;含任一 !OK 表示失败(调用方据此中止刷 AC)。
 func firmwareWaitForAPsAndUpdateJob(jobID string, states []firmwareAPUpgradeState, expectedVersion string, timeout time.Duration) []FirmwareFlashResult {
 	expected := len(states)
@@ -1255,6 +1304,86 @@ func firmwareAPMACsFromStates(states []firmwareAPUpgradeState) []string {
 	return out
 }
 
+func firmwareTargetsForPorts(registry []ManagedModule, expectedPorts []int) ([]string, []int, error) {
+	expectedPorts = managedAntennaPortIndexes(expectedPorts, nil)
+	expected := make(map[int]bool, len(expectedPorts))
+	for _, portIndex := range expectedPorts {
+		expected[portIndex] = true
+	}
+
+	byPort := make(map[int]string, len(expectedPorts))
+	for _, module := range registry {
+		if !expected[module.PortIndex] || !isAntennaManagementIP(module.IP) {
+			continue
+		}
+		if existing := byPort[module.PortIndex]; existing != "" && existing != module.IP {
+			return nil, nil, fmt.Errorf("multiple Antenna addresses resolved on %s", module.Port)
+		}
+		byPort[module.PortIndex] = module.IP
+	}
+
+	targets := make([]string, 0, len(expectedPorts))
+	missing := make([]int, 0)
+	for _, portIndex := range expectedPorts {
+		if ip := strings.TrimSpace(byPort[portIndex]); ip != "" {
+			targets = append(targets, ip)
+		} else {
+			missing = append(missing, portIndex)
+		}
+	}
+	return targets, missing, nil
+}
+
+// firmwareWaitForManagedTargetsByPhysicalPort resolves only the physical
+// ports installed when the job began. Fixed IP order is not device identity:
+// addresses can legitimately swap between Antennas after a simultaneous reboot.
+func firmwareWaitForManagedTargetsByPhysicalPort(hints []string, expectedPorts []int, timeout time.Duration) ([]string, error) {
+	deadline := time.Now().Add(timeout)
+	if timeout <= 0 {
+		deadline = time.Now()
+	}
+
+	for {
+		probeStaticIPs(firmwareMergeIPs(APManagementIPs(), hints))
+		registry := discoverManagedAPs(false)
+		targets, missingPorts, err := firmwareTargetsForPorts(registry, expectedPorts)
+		if err != nil {
+			return nil, err
+		}
+		if len(missingPorts) == 0 && len(targets) > 0 {
+			return targets, nil
+		}
+
+		if !time.Now().Before(deadline) {
+			missing := make([]string, 0, len(missingPorts))
+			for _, portIndex := range missingPorts {
+				missing = append(missing, fmt.Sprintf("Antenna%d/lan%d", portIndex, portIndex))
+			}
+			return nil, fmt.Errorf("physical Antenna discovery incomplete; missing %s", strings.Join(missing, ", "))
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+// firmwareClearCapturedAntennaLeases removes the pre-upgrade MAC leases and
+// only clears an old IP lease when that IP is currently unreachable. A blanket
+// IP deletion can erase a valid lease already acquired by another Antenna
+// after addresses swap during a simultaneous reboot.
+func firmwareClearCapturedAntennaLeases(states []firmwareAPUpgradeState) (int, error) {
+	macs := firmwareAPMACsFromStates(states)
+	offlineIPs := make([]string, 0, len(states))
+	for _, state := range states {
+		ip := strings.TrimSpace(state.IP)
+		if ip != "" && !firmwarePingOnce(ip) {
+			offlineIPs = append(offlineIPs, ip)
+		}
+	}
+	if len(offlineIPs) == 0 && len(macs) == 0 {
+		return 0, nil
+	}
+	return firmwareClearLocalDHCPLeasesForIPsAndMACs(offlineIPs, macs)
+}
+
 func firmwareMergeIPs(groups ...[]string) []string {
 	out := make([]string, 0)
 	seen := make(map[string]bool)
@@ -1521,7 +1650,6 @@ func firmwareCommandAPWgetAndFlash(ip string, downloadURL string, keepSettings b
 	if downloadURL == "" {
 		return fmt.Errorf("empty download URL")
 	}
-
 
 	apFirmwarePath := "/tmp/lrap-ap-firmware.bin"
 	apLogPath := "/tmp/lrap-firmware-upgrade.log"

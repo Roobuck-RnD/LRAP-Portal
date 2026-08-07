@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -124,6 +125,15 @@ func staticLeaseUpsert(sid, mac, ip, name string) (string, bool, error) {
 	mac = staticLeaseNormalizeMAC(mac)
 	ip = strings.TrimSpace(ip)
 
+	if !staticLeaseMACPattern.MatchString(mac) {
+		return "", false, staticLeaseValidationError{message: "invalid MAC address"}
+	}
+	if staticLeaseIsManagedAntennaMAC(mac) {
+		return "", false, staticLeaseValidationError{
+			message: "This MAC belongs to an internal managed device and cannot be assigned a client static lease",
+		}
+	}
+
 	existing, err := getUciStaticLeasesLocal(sid)
 	if err != nil {
 		return "", false, err
@@ -223,6 +233,52 @@ func staticLeaseDeleteBySection(sid, section string) error {
 
 func staticLeaseNormalizeMAC(mac string) string {
 	return strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(mac), "-", ":"))
+}
+
+// staticLeaseManagedAntennaMACs combines the stable managed-module registry
+// with current leases from the protected management pool. The physical-port
+// check prevents a malformed or stale lease line from classifying a normal
+// client MAC as an Antenna.
+func staticLeaseManagedAntennaMACs(
+	modules []ManagedModule,
+	leasesRaw string,
+	portByMAC map[string]string,
+) map[string]struct{} {
+	protected := make(map[string]struct{})
+
+	for _, module := range modules {
+		mac := staticLeaseNormalizeMAC(module.MAC)
+		if module.PortIndex > 0 && staticLeaseMACPattern.MatchString(mac) {
+			protected[mac] = struct{}{}
+		}
+	}
+
+	for _, line := range strings.Split(leasesRaw, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 || !isAntennaManagementIP(fields[2]) {
+			continue
+		}
+
+		mac := staticLeaseNormalizeMAC(fields[1])
+		if !staticLeaseMACPattern.MatchString(mac) {
+			continue
+		}
+		if lanPortNumber(strings.TrimSpace(portByMAC[mac])) == 0 {
+			continue
+		}
+		protected[mac] = struct{}{}
+	}
+
+	return protected
+}
+
+func staticLeaseIsManagedAntennaMAC(mac string) bool {
+	modules := discoverManagedAPs(true)
+	portByMAC := listLanEdgePortsByMAC()
+	leasesRaw, _ := os.ReadFile(managedAntennaDHCPLeasePath)
+	protected := staticLeaseManagedAntennaMACs(modules, string(leasesRaw), portByMAC)
+	_, ok := protected[staticLeaseNormalizeMAC(mac)]
+	return ok
 }
 
 func staticLeaseValidateAssignment(

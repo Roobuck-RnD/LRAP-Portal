@@ -41,7 +41,7 @@ func newHTTPClient() *http.Client {
 	insecure := os.Getenv("INSECURE_TLS") == "1"
 	tr := &http.Transport{
 		TLSClientConfig:     &tls.Config{InsecureSkipVerify: insecure},
-		DisableKeepAlives: true,
+		DisableKeepAlives:   true,
 		MaxIdleConns:        256,
 		MaxIdleConnsPerHost: 128,
 		IdleConnTimeout:     90 * time.Second,
@@ -175,7 +175,7 @@ func ubusCallJSONLocal(sid, object, method string, params map[string]any) (map[s
 	ubusURL := envOr("UBUS_URL", "http://127.0.0.1/ubus")
 	reqBody, _ := json.Marshal(ubusReq{
 		Jsonrpc: "2.0", ID: 2, Method: "call",
-		Params:  []any{sid, object, method, params},
+		Params: []any{sid, object, method, params},
 	})
 	resp, err := newHTTPClient().Post(ubusURL, "application/json", bytes.NewReader(reqBody))
 	if err != nil {
@@ -193,7 +193,7 @@ func ubusCallJSONAt(ip, sid, object, method string, params map[string]any) (map[
 	target := (&url.URL{Scheme: "http", Host: ip, Path: "/ubus"}).String()
 	body, _ := json.Marshal(ubusReq{
 		Jsonrpc: "2.0", ID: 2, Method: "call",
-		Params:  []any{sid, object, method, params},
+		Params: []any{sid, object, method, params},
 	})
 	resp, err := newHTTPClient().Post(target, "application/json", bytes.NewReader(body))
 	if err != nil {
@@ -257,6 +257,12 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 func main() {
 	log.SetPrefix("[lrapServer] ")
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+
+	// Enforce the private Antenna DHCP pool before accepting API requests. This
+	// also migrates older scalar tag options to the UCI list form required by
+	// OpenWrt's dnsmasq generator and asynchronously repairs any Antenna lease
+	// that previously escaped into the ordinary client pool.
+	repairProtectedDHCPAtStartup()
 
 	mux := http.NewServeMux()
 

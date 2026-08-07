@@ -76,3 +76,37 @@ func TestStaticLeaseValidateAssignment(t *testing.T) {
 		})
 	}
 }
+
+func TestStaticLeaseManagedAntennaMACs(t *testing.T) {
+	modules := []ManagedModule{
+		{
+			ModuleID:  "antenna:1",
+			Type:      "ap",
+			Port:      "lan1",
+			PortIndex: 1,
+			IP:        "10.10.18.2",
+			MAC:       "AA:BB:CC:DD:EE:01",
+		},
+	}
+	leasesRaw := strings.Join([]string{
+		"0 aa:bb:cc:dd:ee:02 10.10.18.3 * *",
+		"0 aa:bb:cc:dd:ee:03 10.10.18.100 client *",
+		"0 aa:bb:cc:dd:ee:04 10.10.18.4 * *",
+	}, "\n")
+	portByMAC := map[string]string{
+		"AA:BB:CC:DD:EE:02": "lan2",
+		"AA:BB:CC:DD:EE:03": "lan3",
+	}
+
+	got := staticLeaseManagedAntennaMACs(modules, leasesRaw, portByMAC)
+	for _, mac := range []string{"AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"} {
+		if _, ok := got[mac]; !ok {
+			t.Fatalf("managed MAC %s was not protected", mac)
+		}
+	}
+	for _, mac := range []string{"AA:BB:CC:DD:EE:03", "AA:BB:CC:DD:EE:04"} {
+		if _, ok := got[mac]; ok {
+			t.Fatalf("ordinary or unproven MAC %s was unexpectedly protected", mac)
+		}
+	}
+}
