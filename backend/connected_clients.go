@@ -46,17 +46,22 @@ type ConnectedClient struct {
 }
 
 type ConnectedClientModule struct {
-	ModuleID string            `json:"module_id"`
-	Name     string            `json:"name"`
-	Type     string            `json:"type"` // main / ap
-	Port     string            `json:"port,omitempty"`
-	IP       string            `json:"ip,omitempty"`
-	MAC      string            `json:"mac,omitempty"` // 兼容旧前端，等于 br-lan MAC
-	BrLanMAC string            `json:"br_lan_mac,omitempty"`
-	Ra0MAC   string            `json:"ra0_mac,omitempty"`
-	Rax0MAC  string            `json:"rax0_mac,omitempty"`
-	Online   bool              `json:"online"`
-	Clients  []ConnectedClient `json:"clients"`
+	ModuleID string `json:"module_id"`
+	Name     string `json:"name"`
+	Type     string `json:"type"` // main / ap
+	Port     string `json:"port,omitempty"`
+	IP       string `json:"ip,omitempty"`
+	MAC      string `json:"mac,omitempty"` // 兼容旧前端，等于 br-lan MAC
+	BrLanMAC string `json:"br_lan_mac,omitempty"`
+	Ra0MAC   string `json:"ra0_mac,omitempty"`
+	Rax0MAC  string `json:"rax0_mac,omitempty"`
+	// The networks this module actually broadcasts. Both are already read while
+	// resolving each station's SSID; keeping them lets a caller describe a module
+	// that currently has no clients at all.
+	SSID24  string            `json:"ssid_24,omitempty"`
+	SSID5   string            `json:"ssid_5,omitempty"`
+	Online  bool              `json:"online"`
+	Clients []ConnectedClient `json:"clients"`
 }
 
 type ConnectedClientsResponse struct {
@@ -153,6 +158,7 @@ func connectedClientsHandler(w http.ResponseWriter, r *http.Request) {
 	// in the final online list. The best row is chosen by valid signal first, then
 	// stronger RSSI.
 	ccDedupeClientsAcrossModules(modules)
+	ccDropBackhaulStations(modules, easyMeshLocalBackhaulStationMACs())
 
 	_ = json.NewEncoder(w).Encode(ConnectedClientsResponse{
 		Modules:              modules,
@@ -160,6 +166,35 @@ func connectedClientsHandler(w http.ResponseWriter, r *http.Request) {
 		ExpectedAntennaCount: expectedAntennaCount,
 		OnlineAntennaCount:   len(apModules),
 	})
+}
+
+// ccDropBackhaulStations removes the Mesh Backhaul stations from the client
+// lists.
+//
+// An Agent reaches its Root by associating to the Root's client-facing BSS with
+// an ordinary station, so it lands in the bridge FDB and in the station table
+// exactly like a laptop and is collected as a client. It is not one: it is the
+// far end of a Mesh hop, and the chassis behind it is already a device in its
+// own right. Measured on the Root it showed as a nameless, address-less entry on
+// the main module. Nothing associated this way before the Mesh existed, so this
+// only appears once a Root has an Agent.
+func ccDropBackhaulStations(modules []ConnectedClientModule, backhaulStations map[string]bool) int {
+	if len(backhaulStations) == 0 {
+		return 0
+	}
+	dropped := 0
+	for i := range modules {
+		kept := modules[i].Clients[:0]
+		for _, client := range modules[i].Clients {
+			if backhaulStations[strings.ToLower(strings.TrimSpace(client.MAC))] {
+				dropped++
+				continue
+			}
+			kept = append(kept, client)
+		}
+		modules[i].Clients = kept
+	}
+	return dropped
 }
 
 // ccExpectedAntennaCount uses the physical AC LAN links as the expected module
@@ -208,6 +243,8 @@ func ccBuildMainModule(leases map[string]ccDhcpLease, arpByMAC map[string]ccArpE
 		BrLanMAC: brLanMAC,
 		Ra0MAC:   ra0MAC,
 		Rax0MAC:  rax0MAC,
+		SSID24:   ssid24,
+		SSID5:    ssid5,
 		Online:   true,
 		Clients:  nil,
 	}
@@ -289,6 +326,8 @@ func ccBuildSingleAPModule(ip string, leases map[string]ccDhcpLease, arpByMAC ma
 		BrLanMAC: brLanMAC,
 		Ra0MAC:   ra0MAC,
 		Rax0MAC:  rax0MAC,
+		SSID24:   ssid24,
+		SSID5:    ssid5,
 		Online:   true,
 		Clients:  nil,
 	}

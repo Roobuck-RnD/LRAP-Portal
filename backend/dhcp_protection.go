@@ -16,6 +16,7 @@ const (
 	managedAntennaDHCPTag         = "rbap"
 	managedAntennaVendorClass     = "RoobuckAP"
 	managedAntennaDHCPSection     = "rbap_pool"
+	managedAntennaLeaseTime       = "5m"
 	managedAntennaVendorSection   = "rbap_vc"
 	ordinaryClientDHCPSection     = "lan"
 	managedAntennaDHCPLeasePath   = "/tmp/dhcp.leases"
@@ -104,14 +105,52 @@ func protectedDHCPConfigHealthy(raw string) bool {
 	pool, ok := sections[managedAntennaDHCPSection]
 	if !ok ||
 		pool.Type != "dhcp" ||
-		pool.Options["interface"] != "lan" ||
+		pool.Options["interface"] != managedAntennaDHCPInterface() ||
 		pool.Options["start"] != "2" ||
 		pool.Options["limit"] != "4" ||
+		// Included so units still carrying the original 12h lease are repaired on
+		// upgrade rather than staying vulnerable to pool exhaustion.
+		pool.Options["leasetime"] != managedAntennaLeaseTime ||
 		!stringSliceExactly(pool.Lists["tag"], managedAntennaDHCPTag) {
 		return false
 	}
 
 	return true
+}
+
+// managedAntennaDHCPInterface picks the network the managed-Antenna pool serves.
+//
+// The isolation marker alone is not enough. A Mesh rollback that fails partway
+// can leave the marker behind after the VLAN devices are gone, and this pool
+// then points at an "antenna_mgmt" interface that does not exist. dnsmasq
+// answers every client on the box with "no address available" — WiFi associates
+// and nothing gets an address, on the Antenna pool AND the ordinary LAN pool.
+// What decides it is therefore whether the management network is CONFIGURED,
+// not whether netifd has finished bringing it up. Reading the live address here
+// looked equivalent and is not: this repair runs at startup, before the boot
+// network has settled, so every reboot in isolated mode found no address yet,
+// concluded the device was not isolated, and rebound the Antenna pool onto the
+// client network. Measured on the Controller after the reboot that Enable Mesh
+// performs: the Antennas then never got a management address, fell back to a
+// client-network lease, and disappeared from discovery, which only ever probes
+// the fixed management pools.
+func managedAntennaDHCPInterface() string {
+	if antennaManagementIsIsolated() && easyMeshManagementNetworkConfigured() {
+		return "antenna_mgmt"
+	}
+	return "lan"
+}
+
+// easyMeshManagementNetworkConfigured reports whether the isolated Antenna
+// management network still exists in configuration: both the interface and the
+// bridge it rides on, so a rollback that removed either one is not mistaken for
+// a working management plane.
+var easyMeshManagementNetworkConfigured = func() bool {
+	device, deviceErr := easyMeshExecLocal("uci -q get network.antenna_mgmt.device")
+	bridge, bridgeErr := easyMeshExecLocal("uci -q get network.mesh_mgmt_bridge.name")
+	return deviceErr == nil && bridgeErr == nil &&
+		strings.TrimSpace(device) == AntennaManagementBridge &&
+		strings.TrimSpace(bridge) == AntennaManagementBridge
 }
 
 func stringSliceExactly(values []string, expected string) bool {
@@ -144,10 +183,17 @@ func ensureProtectedDHCPConfig(commit bool, restartDNSMasq bool) (bool, error) {
 		{"set", "dhcp." + managedAntennaVendorSection + ".networkid=" + managedAntennaDHCPTag},
 		{"set", "dhcp." + managedAntennaVendorSection + ".vendorclass=" + managedAntennaVendorClass},
 		{"set", "dhcp." + managedAntennaDHCPSection + "=dhcp"},
-		{"set", "dhcp." + managedAntennaDHCPSection + ".interface=lan"},
+		{"set", "dhcp." + managedAntennaDHCPSection + ".interface=" + managedAntennaDHCPInterface()},
 		{"set", "dhcp." + managedAntennaDHCPSection + ".start=2"},
 		{"set", "dhcp." + managedAntennaDHCPSection + ".limit=4"},
-		{"set", "dhcp." + managedAntennaDHCPSection + ".leasetime=12h"},
+		// Short lease on purpose. The pool holds only four addresses and an
+		// Antenna's DHCP client MAC is regenerated on every boot, so each reboot
+		// burns one lease. With a 12h lease four reboots exhausted the pool: the
+		// Antenna then got no management address at all — its 1905 daemon kept
+		// transmitting (visible in the AC's bridge FDB) while ARP, ping, ubus and
+		// SSH were all dead, which looks exactly like a bricked unit. A short
+		// lease lets the stale entries age out on their own.
+		{"set", "dhcp." + managedAntennaDHCPSection + ".leasetime=" + managedAntennaLeaseTime},
 		{"set", "dhcp." + managedAntennaDHCPSection + ".dynamicdhcp=1"},
 		{"set", "dhcp." + managedAntennaDHCPSection + ".ignore=0"},
 	}
@@ -218,9 +264,11 @@ func readManagedAntennaDHCPLeases() ([]managedAntennaDHCPLease, error) {
 }
 
 func isAntennaManagementIP(ip string) bool {
-	for _, managedIP := range APManagementIPs() {
-		if strings.TrimSpace(ip) == managedIP {
-			return true
+	for _, pool := range [][]string{LegacyAPManagementIPs(), isolatedAPManagementIPs} {
+		for _, managedIP := range pool {
+			if strings.TrimSpace(ip) == managedIP {
+				return true
+			}
 		}
 	}
 	return false

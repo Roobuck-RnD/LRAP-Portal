@@ -308,6 +308,7 @@ export default function WiFiConfiguration(): JSX.Element {
   const [syncResults, setSyncResults] = useState<WifiSyncTargetResult[]>([])
   const [show2g, setShow2g] = useState(false)
   const [show5g, setShow5g] = useState(false)
+  const [meshManaged, setMeshManaged] = useState(false)
   const hasRedirectedRef = useRef(false)
 
   const hasChanges = useMemo(
@@ -385,6 +386,13 @@ export default function WiFiConfiguration(): JSX.Element {
   useEffect(() => {
     if (sessionStorage.getItem('wifiApplyPending') === 'true') return
     void fetchWifi({ silent: cachedAtMount !== undefined })
+    void apiFetch('/api/mtk/easymesh')
+      .then(async (response) => {
+        if (!response.ok) return
+        const mesh = (await response.json()) as { config?: { enabled?: boolean } }
+        setMeshManaged(Boolean(mesh.config?.enabled))
+      })
+      .catch(() => undefined)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -498,6 +506,10 @@ export default function WiFiConfiguration(): JSX.Element {
   }
 
   const handleSave = async () => {
+    if (meshManaged) {
+      setError('WiFi settings are controlled by the EasyMesh Controller while Mesh is enabled.')
+      return
+    }
     if (!hasChanges) return
 
     const validationError = validateWifiConfig(config)
@@ -685,6 +697,15 @@ export default function WiFiConfiguration(): JSX.Element {
       )}
 
       <PageHeader title="WiFi Configuration" description="Manage the shared SSIDs and per-device radio settings for the router and antennas." />
+
+      {meshManaged ? (
+        <div className="flex items-start gap-3 rounded-lg border border-primary/30 bg-primary/10 p-4 text-sm">
+          <RadioTower className="mt-0.5 size-4 shrink-0 text-primary" />
+          <p className="text-muted-foreground">
+            EasyMesh is active. SSIDs, channels and Radio state are owned by the Root Controller and cannot be saved from this page.
+          </p>
+        </div>
+      ) : null}
 
         <div className="grid gap-3">
           <Card>
@@ -1019,7 +1040,7 @@ export default function WiFiConfiguration(): JSX.Element {
                   onClick={() => {
                     void handleSave()
                   }}
-                  disabled={saving || !hasChanges}
+                  disabled={saving || !hasChanges || meshManaged}
                 >
                   {saving ? (
                     'Applying...'

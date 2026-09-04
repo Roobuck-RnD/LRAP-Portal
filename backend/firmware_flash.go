@@ -1840,6 +1840,11 @@ func firmwareCleanupExpiredDownloads() {
 
 func firmwareBuildDownloadURL(r *http.Request, id string) string {
 	acIP := firmwareDetectACLANIP()
+	// Isolated Antennas can reach the backend only through the per-chassis
+	// management VLAN. The client LAN is deliberately not routed into VLAN 200.
+	if antennaManagementIsIsolated() {
+		acIP = AntennaManagementACIP
+	}
 	if acIP == "" {
 		acIP = firmwareHostWithoutPort(r.Host)
 	}

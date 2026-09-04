@@ -47,3 +47,14 @@ LRAPAssests*/
 backend/lrapServer
 backend/usr/sbin/
 *.exe
+
+# Deployment tarball built from dist/ before it is pushed to a device
+/site.tar
+
+# Go build caches used by the cross-compile
+/.tmp-go-cache/
+backend/.gocache/
+
+# Local agent/assistant tooling, not part of the product
+/.agents/
+/.claude/

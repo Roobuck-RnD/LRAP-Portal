@@ -293,13 +293,33 @@
 
   .login-route-flow {
     stroke-dasharray: 0.08 0.92;
-    animation: login-route-flow 4s linear infinite;
+    animation: route-flow 4s linear infinite;
   }
 
   .login-node-pulse {
     transform-box: fill-box;
     transform-origin: center;
-    animation: login-node-pulse 3.2s ease-in-out infinite;
+    animation: node-pulse 3.2s ease-in-out infinite;
+  }
+
+  /* Live Mesh topology: a travelling dash shows which way the Backhaul carries
+     traffic, and the node core pulses while the hop is up. */
+  .topo-link-flow {
+    stroke-dasharray: 0.06 0.94;
+    animation: route-flow 3.2s linear infinite;
+  }
+
+  .topo-node-pulse {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: node-pulse 3.2s ease-in-out infinite;
+  }
+
+  .topo-grid {
+    background-image:
+      linear-gradient(color-mix(in oklab, var(--primary) 7%, transparent) 1px, transparent 1px),
+      linear-gradient(90deg, color-mix(in oklab, var(--primary) 7%, transparent) 1px, transparent 1px);
+    background-size: 34px 34px;
   }
 }
 
@@ -312,12 +332,12 @@
   }
 }
 
-@keyframes login-route-flow {
+@keyframes route-flow {
   from { stroke-dashoffset: 1; }
   to { stroke-dashoffset: 0; }
 }
 
-@keyframes login-node-pulse {
+@keyframes node-pulse {
   0%, 100% { opacity: 0.55; transform: scale(0.8); }
   50% { opacity: 1; transform: scale(1.35); }
 }
@@ -334,6 +354,8 @@
 
   .login-route-flow,
   .login-node-pulse,
+  .topo-link-flow,
+  .topo-node-pulse,
   .login-topology::after {
     animation: none;
   }

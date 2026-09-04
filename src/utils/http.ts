@@ -2,7 +2,26 @@ import { toast } from 'sonner';
 import useDevModeStore from '@/states/devModeState';
 import { clearPageDataCache } from '@/utils/page-data-cache';
 
-export const API_BASE = import.meta.env.VITE_API_BASE || '';
+// The portal is served by uhttpd on :80 while the API lives on :9080 of the SAME
+// device, so the base has to be absolute — but it must follow whichever device
+// the operator actually opened, not a fixed address.
+//
+// Hardcoding a host here breaks the moment there is more than one AC: in a Mesh
+// the Agent serves its own copy of this page, and every call from it went to the
+// Root instead, so the Agent's portal silently showed the Root's node role,
+// radios and Antennas.
+//
+// VITE_API_BASE stays available as an override for `npm run dev`, where the page
+// is served from a laptop and the device is elsewhere.
+function deviceApiBase(): string {
+  if (typeof window === 'undefined') return '';
+  const { protocol, hostname, port } = window.location;
+  // Already served from the API itself (or a proxy in front of it): same origin.
+  if (port === '9080') return '';
+  return `${protocol}//${hostname}:9080`;
+}
+
+export const API_BASE = import.meta.env.VITE_API_BASE || deviceApiBase();
 
 // Endpoints that handle their own auth failures (the login call itself must be
 // able to return 401 without triggering the "session expired" flow).
@@ -48,7 +67,8 @@ function handleUnauthorized() {
   // visible; the reboot page clears auth and navigates to login at its deadline.
   if (
     sessionStorage.getItem('rebootPending') === 'true' ||
-    sessionStorage.getItem('wifiApplyPending') === 'true'
+    sessionStorage.getItem('wifiApplyPending') === 'true' ||
+    sessionStorage.getItem('meshNetworkTransitionPending') === 'true'
   ) {
     return;
   }

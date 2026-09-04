@@ -142,7 +142,7 @@ func probeStaticIPs(ips []string) {
 // 只返回有效 ARP：
 // flags == 0x2
 // mac != 00:00:00:00:00:00
-// device == br-lan
+// device == the active Antenna management bridge
 //
 // 返回：ip -> mac
 func parseARPByIP() map[string]string {
@@ -185,7 +185,11 @@ func parseARPByIP() map[string]string {
 		if mac == "" || mac == "00:00:00:00:00:00" {
 			continue
 		}
-		if dev != "br-lan" {
+		expectedDevice := "br-lan"
+		if antennaManagementIsIsolated() {
+			expectedDevice = AntennaManagementBridge
+		}
+		if dev != expectedDevice {
 			continue
 		}
 
@@ -203,10 +207,14 @@ func parseARPByIP() map[string]string {
 // 比你之前只匹配 lan1-lan4 更宽松
 func listLanEdgePortsByMAC() map[string]string {
 	out := make(map[string]string)
+	bridgeName := "br-lan"
+	if antennaManagementIsIsolated() {
+		bridgeName = AntennaManagementBridge
+	}
 
-	raw, err := exec.Command("bridge", "fdb", "show", "br", "br-lan").Output()
+	raw, err := exec.Command("bridge", "fdb", "show", "br", bridgeName).Output()
 	if err != nil {
-		log.Printf("lanClients: bridge fdb error: %v", err)
+		log.Printf("lanClients: bridge fdb error on %s: %v", bridgeName, err)
 		return out
 	}
 
@@ -239,10 +247,10 @@ func listLanEdgePortsByMAC() map[string]string {
 		}
 
 		mac := strings.ToUpper(m[1])
-		port := m[2]
+		port := strings.TrimSuffix(m[2], ".200")
 
 		// 跳过 br-lan 自己
-		if port == "br-lan" {
+		if port == bridgeName {
 			continue
 		}
 
