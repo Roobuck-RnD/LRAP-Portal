@@ -1,6 +1,8 @@
 package main
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestProtectedDHCPConfigHealthyRequiresListTags(t *testing.T) {
 	healthy := `
@@ -18,6 +20,7 @@ config dhcp 'rbap_pool'
 	option interface 'lan'
 	option start '2'
 	option limit '4'
+	option leasetime '5m'
 	list tag 'rbap'
 `
 	if !protectedDHCPConfigHealthy(healthy) {
@@ -91,5 +94,55 @@ func TestIsAntennaManagementIP(t *testing.T) {
 		if isAntennaManagementIP(ip) {
 			t.Fatalf("%s must not be recognized as an Antenna management IP", ip)
 		}
+	}
+}
+
+// The Antenna pool is bound from configuration, not from whether netifd has
+// finished bringing the bridge up. Reading the live address made every reboot in
+// isolated mode rebind the pool onto the client network, because this repair
+// runs before the boot network has settled: measured on the Controller after the
+// reboot Enable Mesh performs.
+func TestAntennaPoolBindingSurvivesAnUnsettledBootNetwork(t *testing.T) {
+	defer restoreAntennaPoolSeams(t)()
+	antennaManagementIsIsolated = func() bool { return true }
+	// Configured, but with no address yet -- exactly the state at boot.
+	easyMeshManagementNetworkConfigured = func() bool { return true }
+
+	if got := managedAntennaDHCPInterface(); got != "antenna_mgmt" {
+		t.Fatalf("interface = %q while the boot network was still settling, want antenna_mgmt", got)
+	}
+}
+
+// A rollback that tore the management network down must send the pool back to
+// the client network: binding it to an interface that no longer exists makes
+// dnsmasq answer every client on the box with "no address available".
+func TestAntennaPoolFallsBackWhenTheManagementNetworkIsGone(t *testing.T) {
+	defer restoreAntennaPoolSeams(t)()
+	antennaManagementIsIsolated = func() bool { return true }
+	easyMeshManagementNetworkConfigured = func() bool { return false }
+
+	if got := managedAntennaDHCPInterface(); got != "lan" {
+		t.Fatalf("interface = %q with no management network configured, want lan", got)
+	}
+}
+
+// Without the isolation marker the device is not in isolated mode at all.
+func TestAntennaPoolUsesTheClientNetworkWhenNotIsolated(t *testing.T) {
+	defer restoreAntennaPoolSeams(t)()
+	antennaManagementIsIsolated = func() bool { return false }
+	easyMeshManagementNetworkConfigured = func() bool { return true }
+
+	if got := managedAntennaDHCPInterface(); got != "lan" {
+		t.Fatalf("interface = %q on a standalone unit, want lan", got)
+	}
+}
+
+func restoreAntennaPoolSeams(t *testing.T) func() {
+	t.Helper()
+	isolated := antennaManagementIsIsolated
+	configured := easyMeshManagementNetworkConfigured
+	return func() {
+		antennaManagementIsIsolated = isolated
+		easyMeshManagementNetworkConfigured = configured
 	}
 }

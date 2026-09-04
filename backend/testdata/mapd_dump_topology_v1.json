@@ -1,0 +1,179 @@
+{
+"topology information":[ 
+{
+"AL MAC":"f0:a8:82:fb:00:a4",
+"MAP Version":"R2",
+"Device role":"01",
+"Distance from controller":"0",
+"BH Interface(AP)":[
+{"MAC address":"f2:a8:82:fb:00:a4",
+"interface name":"NA"}],
+"BH Interface(APCLI)":[
+],
+"backhaul link metrics":[{
+"neighbor_al":"de:84:03:11:57:80",
+"metrics":[{
+"local_if_mac":"f2:a8:82:fb:00:a4",
+"neighbor_if_mac":"d6:84:03:01:57:80",
+"tx packet Errors":"0",
+"transmittedPackets":"51316",
+"macThroughputCap":"51",
+"linkAvailability":"50",
+"phyRate":"0",
+"rx packet Errors":"0",
+"Packets Received":"35295",
+"RSSI":"-49"
+}
+]
+}
+],
+"Number of radios":"2",
+"Radio Info":[
+{
+"channel":"48",
+"band":"5G",
+"identifier":"00:00:00:00:01:01",
+"BW":"NA",
+"wireless mode":"5",
+"Tx Spatial streams":"2",
+"Rx Spatial streams":"2",
+"BSSINFO":[{
+"BSSID":"f2:a8:82:fb:00:a4",
+"SSID":"Chase_Test",
+"BACKHAUL":"0",
+"FRONTHAUL":"0",
+"Security":"0060",
+"Encryption":"0008",
+"Pass-phrase":"12345678",
+"Hidden":"0",
+"connected sta info":[
+{
+"STA MAC address":"d6:84:03:01:57:80",
+"last assoc time":"0",
+"BH STA":"Yes",
+"Medium":"5G",
+"uplink rssi":"-50"},
+{
+"STA MAC address":"02:5e:9a:1f:09:51",
+"last assoc time":"0",
+"BH STA":"No",
+"Medium":"5G",
+"uplink rssi":"-79"}
+]}]
+},
+{
+"channel":"5",
+"band":"2G",
+"identifier":"00:00:00:00:01:00",
+"BW":"NA",
+"wireless mode":"5",
+"Tx Spatial streams":"2",
+"Rx Spatial streams":"2",
+"BSSINFO":[{
+"BSSID":"f0:a8:82:fb:00:a4",
+"SSID":"Chase_Test",
+"BACKHAUL":"0",
+"FRONTHAUL":"0",
+"Security":"0060",
+"Encryption":"0008",
+"Pass-phrase":"12345678",
+"Hidden":"0"}]
+}],
+"BH Info":[
+
+],
+"APCLI INFO":[
+{
+"BSSID":"fa:a8:82:fb:00:a4",
+"APCLI Client":"1",
+"Band":"5G"},
+{
+"BSSID":"f6:a8:82:fb:00:a4",
+"APCLI Client":"1",
+"Band":"2G"}]
+,"Other Clients Info":[
+
+]
+},
+{
+"AL MAC":"de:84:03:11:57:80",
+"MAP Version":"R2",
+"Device role":"02",
+"Distance from controller":"1",
+"Upstream 1905 device":"f0:a8:82:fb:00:a4",
+"BH Interface(AP)":[
+],
+"BH Interface(APCLI)":[
+{"MAC address":"d6:84:03:01:57:80",
+"interface name":"N/A"}],
+"backhaul link metrics":[{
+"neighbor_al":"f0:a8:82:fb:00:a4",
+"metrics":[{
+"local_if_mac":"d6:84:03:01:57:80",
+"neighbor_if_mac":"f2:a8:82:fb:00:a4",
+"tx packet Errors":"0",
+"transmittedPackets":"0",
+"macThroughputCap":"1",
+"linkAvailability":"50",
+"phyRate":"0",
+"rx packet Errors":"0",
+"Packets Received":"53840",
+"RSSI":"-69"
+}
+]
+}
+],
+"Number of radios":"2",
+"Radio Info":[
+{
+"channel":"48",
+"band":"5G",
+"identifier":"00:00:00:00:01:01",
+"BW":"NA",
+"wireless mode":"5",
+"Tx Spatial streams":"2",
+"Rx Spatial streams":"2",
+"BSSINFO":[{
+"BSSID":"de:84:03:11:57:80",
+"SSID":"Chase_Test",
+"BACKHAUL":"0",
+"FRONTHAUL":"0"}]
+},
+{
+"channel":"4",
+"band":"2G",
+"identifier":"00:00:00:00:01:00",
+"BW":"NA",
+"wireless mode":"5",
+"Tx Spatial streams":"2",
+"Rx Spatial streams":"2",
+"BSSINFO":[{
+"BSSID":"dc:84:03:01:57:80",
+"SSID":"Chase_Test",
+"BACKHAUL":"0",
+"FRONTHAUL":"0"}]
+}],
+"BH Info":[
+{
+"neighbor almac addr":"f0:a8:82:fb:00:a4",
+"connected iface addr":"d6:84:03:01:57:80",
+"Backhaul Medium Type":"5G",
+"RSSI":"-69"}
+],
+"APCLI INFO":[
+{
+"BSSID":"d6:84:03:01:57:80",
+"APCLI Client":"1",
+"Band":"5G"},
+{
+"APCLI MAC":"da:84:03:01:57:80",
+"APCLI Client":"1"
+}]
+,"Other Clients Info":[
+{
+"1905 Intf address":"dc:84:03:41:57:80",
+"Client Address":"82:2b:5c:a9:e8:af",
+"Medium": "Ethernet"}
+]
+}]
+}

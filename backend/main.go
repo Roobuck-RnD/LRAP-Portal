@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -247,8 +248,13 @@ func createSessionHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"ok":true}`))
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"ok":         true,
+		"node_id":    strings.ToLower(easyMeshNodeID()),
+		"mesh_al_id": easyMeshLocalALID(),
+	})
 }
 
 // ---------- 入口 ----------
@@ -263,6 +269,18 @@ func main() {
 	// OpenWrt's dnsmasq generator and asynchronously repairs any Antenna lease
 	// that previously escaped into the ordinary client pool.
 	repairProtectedDHCPAtStartup()
+	// The client bridge must keep one hardware address for its whole life, or the
+	// DHCP lease it holds — and any static reservation made for it — follows the
+	// bridge membership around instead of the device.
+	pinClientBridgeMACAtStartup()
+	if err := ensureLocalMediaTekWiFiServicesCompatibility(); err != nil {
+		log.Printf("MediaTek wifi reload compatibility check failed: %v", err)
+	}
+	resumeEasyMeshAtStartup()
+	// A network reload silently drops the Backhaul station out of the client
+	// bridge while every "is the Backhaul up" signal keeps saying yes, so an Agent
+	// has to keep watching its own bridge.
+	startBackhaulBridgeWatchdog()
 
 	mux := http.NewServeMux()
 
@@ -298,6 +316,12 @@ func main() {
 	mux.HandleFunc("/api/system/password", withAuth(changePasswordHandler))
 	// wifi ssid/password
 	mux.HandleFunc("/api/mtk/wifi", withAuth(mtkWifiHandler))
+	mux.HandleFunc("/api/mtk/easymesh", withAuth(easyMeshHandler))
+	// Deliberately not behind withAuth: a Controller has no account on an Agent.
+	// The handler guards itself by refusing every caller that is not this
+	// device's own Mesh upstream.
+	mux.HandleFunc("/api/mtk/easymesh/fabric", easyMeshFabricHandler)
+	mux.HandleFunc("/api/mtk/easymesh/peer-leave", easyMeshPeerLeaveHandler)
 	// reboot
 	mux.HandleFunc("/api/system/reboot", withAuth(systemRebootHandler))
 	// network/routes

@@ -71,7 +71,10 @@ const data = {
     {
       title: 'MTK',
       icon: Map,
-      items: [{ title: 'WiFi configuration', url: 'wificonfiguration' }]
+      items: [
+        { title: 'WiFi configuration', url: 'wificonfiguration' },
+        { title: 'EasyMesh', url: 'easymesh' }
+      ]
     }
   ]
 }

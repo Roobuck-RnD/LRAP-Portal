@@ -182,6 +182,10 @@ func mtkWifiHandler(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(info)
 
 	case http.MethodPost:
+		if easyMeshOwnsWiFi() {
+			http.Error(w, `{"error":"WiFi settings are controlled by the EasyMesh Controller while Mesh is enabled"}`, http.StatusConflict)
+			return
+		}
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, `{"error":"bad body"}`, http.StatusBadRequest)
@@ -240,6 +244,10 @@ func mtkWifiHandler(w http.ResponseWriter, r *http.Request) {
 		scheduleMtkWifiApply(applyPlan)
 
 	case http.MethodPatch:
+		if easyMeshOwnsWiFi() {
+			http.Error(w, `{"error":"Radio state is controlled by EasyMesh while Mesh is enabled"}`, http.StatusConflict)
+			return
+		}
 		// Kept for direct API callers. The React frontend does not use PATCH anymore.
 		var req MtkWifiRadioToggleRequest
 
@@ -1075,7 +1083,7 @@ func startMtkWifiStateEnforcer() {
 }
 
 func enforceAllMtkWifiRadioStates() {
-	if mtkWifiApplyPending.Load() {
+	if mtkWifiApplyPending.Load() || easyMeshOwnsWiFi() {
 		return
 	}
 
@@ -1119,6 +1127,9 @@ func setMtkWifiRadioStateLogic(req MtkWifiRadioToggleRequest) (MtkWifiRadioToggl
 
 	if mtkWifiApplyPending.Load() {
 		return MtkWifiRadioToggleResponse{}, fmt.Errorf("WiFi apply is in progress")
+	}
+	if easyMeshOwnsWiFi() {
+		return MtkWifiRadioToggleResponse{}, fmt.Errorf("radio state is controlled by EasyMesh")
 	}
 
 	req.ModuleID = strings.ToLower(strings.TrimSpace(req.ModuleID))

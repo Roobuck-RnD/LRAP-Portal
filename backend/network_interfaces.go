@@ -1411,7 +1411,7 @@ func ifaceNetmaskSupportsRequiredAddresses(mask string) bool {
 
 	network := acValue & maskValue
 	broadcast := network | ^maskValue
-	requiredAddresses := append([]string{ACManagementIP}, APManagementIPs()...)
+	requiredAddresses := clientLANReservedAddresses()
 
 	for _, address := range requiredAddresses {
 		value, valid := ifaceIPv4ToUint32(address)
@@ -1465,7 +1465,7 @@ func ifaceValidateLanDHCPPool(netmask string, req *InterfaceDHCPReq) error {
 		return errIfaceDHCPPoolIncompatible
 	}
 	network := uint64(acValue & maskValue)
-	requiredAddresses := append([]string{ACManagementIP}, APManagementIPs()...)
+	requiredAddresses := clientLANReservedAddresses()
 	for _, address := range requiredAddresses {
 		value, valid := ifaceIPv4ToUint32(address)
 		if !valid || uint64(value) < network {
@@ -1478,6 +1478,17 @@ func ifaceValidateLanDHCPPool(netmask string, req *InterfaceDHCPReq) error {
 	}
 
 	return nil
+}
+
+// Before VLAN separation the Antenna addresses live in the client LAN and the
+// user-selected netmask/pool must preserve them. Afterwards they are on an
+// isolated /29, so client-LAN validation must no longer try to include them.
+func clientLANReservedAddresses() []string {
+	addresses := []string{ACManagementIP}
+	if !antennaManagementIsIsolated() {
+		addresses = append(addresses, LegacyAPManagementIPs()...)
+	}
+	return addresses
 }
 
 func ifaceIPv4ToUint32(ip string) (uint32, bool) {
