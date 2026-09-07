@@ -3125,6 +3125,11 @@ func maintainControllerOnboardingWindow(band string, baseline map[string]bool, w
 	policyApplied := false
 	sawWrongBand := false
 	sawManagementMissing := false
+	// A Mesh that is already up keeps its Agents associated to this same Backhaul
+	// BSS, so "is anything associated" cannot tell a pairing in progress from the
+	// Agents that were already there. Count them once and watch for the count to
+	// GROW instead.
+	baselineStations := easyMeshBackhaulBSSStations(band)
 	setEasyMeshJobStage("Wireless onboarding open for up to 5 minutes")
 
 	for {
@@ -3154,7 +3159,10 @@ func maintainControllerOnboardingWindow(band string, baseline map[string]bool, w
 			nodes := easyMeshRemoteNodesFromTopologyWithManagement(topology, easyMeshDHCPLeasesByMAC(), management)
 			matched := false
 			for _, node := range nodes {
-				if !easyMeshMediumMatchesBand(node.BackhaulMedium, band) {
+				switch easyMeshOnboardingNodeVerdict(node, baseline, band) {
+				case easyMeshOnboardingNodeAlreadyJoined:
+					continue
+				case easyMeshOnboardingNodeWrongBand:
 					sawWrongBand = true
 					continue
 				}
@@ -3165,11 +3173,7 @@ func maintainControllerOnboardingWindow(band string, baseline map[string]bool, w
 					policyApplied = false
 				}
 				if !policyApplied {
-					if baseline[node.ALID] {
-						setEasyMeshJobStage("Existing selected-band Mesh Agent detected; refreshing client WiFi policy")
-					} else {
-						setEasyMeshJobStage("New selected-band Mesh Agent detected; applying client WiFi policy")
-					}
+					setEasyMeshJobStage("New selected-band Mesh Agent detected; applying client WiFi policy")
 					if _, renewErr := easyMeshExecLocal("/usr/bin/mapd_cli " + easyMeshMapdSocket + " config_renew"); renewErr != nil {
 						return fmt.Errorf("Mesh Agent joined but client WiFi policy refresh failed: %v", renewErr)
 					}
@@ -3205,7 +3209,8 @@ func maintainControllerOnboardingWindow(band string, baseline map[string]bool, w
 			// which the refresh kills the pairing it is meant to protect. Check the
 			// Radio itself as well: if a station is already on the Backhaul BSS, the
 			// window has done its job and must be left alone.
-			if candidateALID == "" && !easyMeshBackhaulBSSHasStation(band) && time.Until(deadline) >= 2*time.Minute {
+			mayRearm := easyMeshOnboardingWindowMayRearm(candidateALID, baselineStations, easyMeshBackhaulBSSStations(band))
+			if mayRearm && time.Until(deadline) >= 2*time.Minute {
 				setEasyMeshJobStage("Keeping the wireless onboarding window open")
 				if err := openControllerOnboardingWindow(band); err != nil {
 					fmt.Printf("EasyMesh onboarding refresh failed: %v\n", err)
@@ -3241,21 +3246,84 @@ func openControllerOnboardingWindow(band string) error {
 	return nil
 }
 
-// easyMeshBackhaulBSSHasStation reports whether anything is associated to this
-// Radio's Backhaul BSS. The MediaTek driver answers `show stainfo` through the
-// kernel log, so the count is read back from there.
-func easyMeshBackhaulBSSHasStation(band string) bool {
+// easyMeshOnboardingNodeVerdict says what an onboarding window should make of
+// one node in the 1905 topology.
+type easyMeshOnboardingVerdict int
+
+const (
+	// Already part of this Mesh before the window opened.
+	easyMeshOnboardingNodeAlreadyJoined easyMeshOnboardingVerdict = iota
+	// New, but its Backhaul is not on the band being onboarded.
+	easyMeshOnboardingNodeWrongBand
+	// The Agent this window is waiting for.
+	easyMeshOnboardingNodeCandidate
+)
+
+// easyMeshOnboardingNodeVerdict classifies one topology node for an onboarding
+// window.
+//
+// Only a NEW Agent can finish a window. The Agents already in the Mesh appear in
+// the topology too, and accepting one of those made a second onboarding report
+// success the instant it started -- the Controller matched the Agent that was
+// already there, whether or not the one being added ever joined. The window is
+// meant to answer "did the Agent I am adding arrive", so a node that was in the
+// Mesh when the window opened tells it nothing.
+func easyMeshOnboardingNodeVerdict(node EasyMeshRemoteNode, baseline map[string]bool, band string) easyMeshOnboardingVerdict {
+	if baseline[node.ALID] {
+		return easyMeshOnboardingNodeAlreadyJoined
+	}
+	if !easyMeshMediumMatchesBand(node.BackhaulMedium, band) {
+		return easyMeshOnboardingNodeWrongBand
+	}
+	return easyMeshOnboardingNodeCandidate
+}
+
+// easyMeshOnboardingWindowMayRearm decides whether the PBC window may be armed
+// again.
+//
+// Re-arming the registrar tears down whatever is already associated to the
+// Backhaul BSS, and the 1905 topology only learns an Agent seconds after it
+// associates -- so the Radio has to be consulted, not just the topology, or the
+// refresh kills the pairing it exists to protect.
+//
+// What it compares is the station COUNT against the count when the window
+// opened, not "is anything associated at all". A Mesh that is already up keeps
+// its Agents on this same BSS, so the older check was permanently false there:
+// the window could never be refreshed, PBC lapsed after the driver's own couple
+// of minutes, and the rest of the five-minute window was dead for the Agent
+// being added.
+//
+// An unreadable count (-1) is treated as "something is there", so a failed read
+// can never tear down a pairing.
+func easyMeshOnboardingWindowMayRearm(candidateALID string, baselineStations int, stations int) bool {
+	if candidateALID != "" {
+		return false
+	}
+	if stations < 0 || baselineStations < 0 {
+		return false
+	}
+	return stations <= baselineStations
+}
+
+// easyMeshBackhaulBSSStations counts what is associated to this Radio's Backhaul
+// BSS. The MediaTek driver answers `show stainfo` through the kernel log, so the
+// count is read back from there. A read that fails reports -1 rather than 0, so
+// a caller cannot mistake "could not tell" for "nothing is associated".
+func easyMeshBackhaulBSSStations(band string) int {
 	bss := easyMeshBackhaulBSSInterface(band)
 	out, err := easyMeshExecLocal("iwpriv " + bss + " show stainfo >/dev/null 2>&1; sleep 1; dmesg | grep -o 'sta_cnt=[0-9]*' | tail -n 1")
 	if err != nil {
-		return false
+		return -1
 	}
 	_, value, ok := strings.Cut(strings.TrimSpace(out), "=")
 	if !ok {
-		return false
+		return -1
 	}
 	count, convErr := strconv.Atoi(strings.TrimSpace(value))
-	return convErr == nil && count > 0
+	if convErr != nil {
+		return -1
+	}
+	return count
 }
 
 // easyMeshOtherBand returns the band that is NOT the selected Backhaul band.

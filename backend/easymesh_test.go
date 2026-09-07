@@ -1171,28 +1171,30 @@ func TestOnboardingArmsWPSExactlyOnce(t *testing.T) {
 // Backhaul BSS, and the 1905 topology only learns the Agent seconds after it
 // associates. The refresh therefore has to consult the Radio, not just the
 // topology, or it kills the pairing it exists to protect.
-func TestRegistrarRefreshChecksTheRadioForAnAssociatedStation(t *testing.T) {
-	source, err := os.ReadFile("easymesh.go")
-	if err != nil {
-		t.Fatalf("read source: %v", err)
+//
+// It compares the station COUNT to the count when the window opened. Asking only
+// "is anything associated" was permanently true on a chassis that already had a
+// Mesh, so a second Agent could never get its window refreshed.
+func TestRegistrarRefreshProtectsPairingsWithoutBlockingASecondAgent(t *testing.T) {
+	// A fresh Controller with nothing associated: keep the window alive.
+	if !easyMeshOnboardingWindowMayRearm("", 0, 0) {
+		t.Fatal("an idle window was not refreshed")
 	}
-	body := string(source)
-	start := strings.Index(body, "func maintainControllerOnboardingWindow")
-	if start < 0 {
-		t.Fatal("maintainControllerOnboardingWindow not found")
+	// A Mesh already carrying one Agent: adding another must still be possible.
+	if !easyMeshOnboardingWindowMayRearm("", 1, 1) {
+		t.Fatal("an existing Agent stopped a second one from being onboarded")
 	}
-	end := strings.Index(body[start:], "\nfunc ")
-	if end < 0 {
-		t.Fatal("could not delimit maintainControllerOnboardingWindow")
+	// Something new associated but has not reached the topology yet.
+	if easyMeshOnboardingWindowMayRearm("", 1, 2) {
+		t.Fatal("re-arming tore down a pairing that had already associated")
 	}
-	fn := body[start : start+end]
-	refresh := strings.Index(fn, "openControllerOnboardingWindow")
-	if refresh < 0 {
-		t.Fatal("the window is never refreshed")
+	// The topology has already named a candidate.
+	if easyMeshOnboardingWindowMayRearm("de:84:03:11:57:80", 0, 0) {
+		t.Fatal("re-arming tore down a candidate the topology had already seen")
 	}
-	guard := fn[:refresh]
-	if !strings.Contains(guard, "easyMeshBackhaulBSSHasStation") {
-		t.Fatal("the refresh is not gated on an already-associated Backhaul station")
+	// An unreadable count must never be read as "nothing is there".
+	if easyMeshOnboardingWindowMayRearm("", 1, -1) || easyMeshOnboardingWindowMayRearm("", -1, 1) {
+		t.Fatal("a failed station read was treated as an idle Radio")
 	}
 }
 
@@ -1409,5 +1411,33 @@ func TestGeneratedBackhaulPassphraseIsSafeForTheDriverAndTheShell(t *testing.T) 
 			t.Fatal("the same passphrase was generated twice")
 		}
 		seen[passphrase] = true
+	}
+}
+
+// A second Agent must be onboardable into a Mesh that is already running, and
+// the Agents already in it must not be mistaken for the one being added.
+//
+// The window used to accept any selected-band node in the topology. With one
+// Agent already joined that made the next onboarding report success immediately,
+// on the strength of the Agent that was already there -- so the operator could
+// not tell whether the new one had joined at all.
+func TestOnlyANewAgentFinishesAnOnboardingWindow(t *testing.T) {
+	joined := EasyMeshRemoteNode{ALID: "de:84:03:11:57:80", BackhaulMedium: "5G"}
+	arriving := EasyMeshRemoteNode{ALID: "de:84:03:11:57:81", BackhaulMedium: "5G"}
+	otherBand := EasyMeshRemoteNode{ALID: "de:84:03:11:57:82", BackhaulMedium: "2.4G"}
+	baseline := map[string]bool{joined.ALID: true}
+
+	if got := easyMeshOnboardingNodeVerdict(joined, baseline, "5g"); got != easyMeshOnboardingNodeAlreadyJoined {
+		t.Fatalf("an Agent already in the Mesh was treated as the one being onboarded: %v", got)
+	}
+	if got := easyMeshOnboardingNodeVerdict(arriving, baseline, "5g"); got != easyMeshOnboardingNodeCandidate {
+		t.Fatalf("the arriving Agent was not accepted: %v", got)
+	}
+	if got := easyMeshOnboardingNodeVerdict(otherBand, baseline, "5g"); got != easyMeshOnboardingNodeWrongBand {
+		t.Fatalf("an Agent on the unselected band was accepted: %v", got)
+	}
+	// A first onboarding has an empty baseline and must still work.
+	if got := easyMeshOnboardingNodeVerdict(arriving, map[string]bool{}, "5g"); got != easyMeshOnboardingNodeCandidate {
+		t.Fatalf("the first Agent was not accepted on an empty baseline: %v", got)
 	}
 }
