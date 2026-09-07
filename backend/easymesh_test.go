@@ -1131,32 +1131,27 @@ func TestBackhaulChannelIsReadFromTheDriversOwnSelection(t *testing.T) {
 	}
 }
 
-// A disagreement about the Backhaul channel is the one thing an Agent cannot fix
-// by waiting, so it has to be reported instead of timed out.
-func TestBackhaulChannelDisagreementIsReportedNotWaitedOut(t *testing.T) {
-	err := easyMeshBackhaulChannelMismatch("5g", "36", 44)
-	if err == nil {
-		t.Fatal("an Agent on 36 and a Root on 44 were treated as compatible")
+// Onboarding must not fail over a channel disagreement.
+//
+// The check that did was wrong twice: its premise was disproved by measurement
+// (both bands mismatched and the Backhaul paired and ran anyway), and it read the
+// Root's channel out of the kernel ring buffer, where a line minutes old looks
+// exactly like a fresh one -- it aborted an onboarding whose WPS exchange had
+// completed and whose station was associated.
+func TestOnboardingDoesNotFailOverAChannelDisagreement(t *testing.T) {
+	onboarding := easyMeshBackhaulWPSEnrolleeCommand("5g")
+	if strings.Contains(onboarding, "will connect") {
+		t.Fatalf("onboarding still reads the Root's channel out of dmesg: %s", onboarding)
 	}
-	for _, expected := range []string{"36", "44", "5GHz", "same"} {
-		if !strings.Contains(err.Error(), expected) {
-			t.Fatalf("the error does not tell the operator %q: %v", expected, err)
-		}
+	source, err := os.ReadFile("easymesh.go")
+	if err != nil {
+		t.Fatalf("read easymesh.go: %v", err)
 	}
-	if same := easyMeshBackhaulChannelMismatch("5g", " 44 ", 44); same != nil {
-		t.Fatalf("matching channels were reported as a mismatch: %v", same)
-	}
-	if twoG := easyMeshBackhaulChannelMismatch("2g", "1", 6); !strings.Contains(twoG.Error(), "2.4GHz") {
-		t.Fatalf("the 2.4GHz band was mislabelled: %v", twoG)
+	if strings.Contains(string(source), "easyMeshBackhaulChannelMismatch") {
+		t.Fatal("the channel mismatch abort is back; a mismatch does not stop a Backhaul from pairing")
 	}
 }
 
-// Onboarding must not arm a WPS scan of its own before the enrollee runs.
-//
-// It used to, purely to read the Root's channel, and the station it left behind
-// -- armed, then stopped, and disabled -- was enough on its own to stop the real
-// enrollee from ever associating, even with ApCliEnable=1 leading. The enrollee's
-// own scan answers the same question, so nothing is lost by not asking twice.
 func TestOnboardingArmsWPSExactlyOnce(t *testing.T) {
 	onboarding := easyMeshBackhaulWPSEnrolleeCommand("5g")
 	if !strings.Contains(onboarding, "WscGetConf=1") {
@@ -1439,5 +1434,40 @@ func TestOnlyANewAgentFinishesAnOnboardingWindow(t *testing.T) {
 	// A first onboarding has an empty baseline and must still work.
 	if got := easyMeshOnboardingNodeVerdict(arriving, map[string]bool{}, "5g"); got != easyMeshOnboardingNodeCandidate {
 		t.Fatalf("the first Agent was not accepted on an empty baseline: %v", got)
+	}
+}
+
+// Extending the Mesh a hop at a time means an Agent hosts the next Agent's join.
+// Only an Agent that has finished joining can: its credential is the Root's,
+// received when it onboarded, and arming WPS on its Radio any earlier would take
+// its own pairing apart.
+func TestOnlyAJoinedAgentCanHostTheNextHop(t *testing.T) {
+	joined := EasyMeshConfig{Role: "agent", Enabled: true}
+	if err := easyMeshMayAcceptDownstream(joined, true); err != nil {
+		t.Fatalf("a joined Agent was refused: %v", err)
+	}
+
+	if err := easyMeshMayAcceptDownstream(joined, false); err == nil {
+		t.Fatal("an Agent that had not finished joining was allowed to host a hop")
+	} else if !strings.Contains(err.Error(), "finished joining") {
+		t.Fatalf("the refusal does not say what to wait for: %v", err)
+	}
+
+	for _, cfg := range []EasyMeshConfig{
+		{Role: "agent", Enabled: false},
+		{Role: "standalone"},
+	} {
+		if err := easyMeshMayAcceptDownstream(cfg, true); err == nil {
+			t.Fatalf("%+v was allowed to host a hop", cfg)
+		}
+	}
+
+	// The Root has its own window; pointing at it beats a generic refusal.
+	err := easyMeshMayAcceptDownstream(EasyMeshConfig{Role: "controller", Enabled: true}, true)
+	if err == nil {
+		t.Fatal("the Root was allowed to use the Agent action")
+	}
+	if !strings.Contains(err.Error(), "Open wireless onboarding window") {
+		t.Fatalf("the Root was not pointed at its own action: %v", err)
 	}
 }

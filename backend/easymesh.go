@@ -306,7 +306,7 @@ func handleEasyMeshAction(req easyMeshRequest) (uint64, error) {
 			return 0, errors.New("disable EasyMesh before changing the node role or backhaul Antenna")
 		}
 		return 0, saveEasyMeshConfig(cfg)
-	case "enable_mesh", "prepare_network", "prepare_radios", "rollback_network", "activate", "onboard", "sync_fronthaul", "leave", "disable":
+	case "enable_mesh", "prepare_network", "prepare_radios", "rollback_network", "activate", "onboard", "accept_downstream", "sync_fronthaul", "leave", "disable":
 		return startEasyMeshJob(req.Action)
 	default:
 		return 0, fmt.Errorf("unsupported action %q", req.Action)
@@ -361,6 +361,8 @@ func runEasyMeshJob(action string) {
 		err = activateEasyMesh()
 	case "onboard":
 		err = triggerEasyMeshOnboarding()
+	case "accept_downstream":
+		err = acceptDownstreamMeshNode()
 	case "sync_fronthaul":
 		err = syncEasyMeshFronthaul()
 	case "leave", "disable":
@@ -3073,18 +3075,6 @@ func waitForEasyMeshBackhaulDuringOnboarding(band string, timeout time.Duration)
 				fmt.Printf("EasyMesh Agent WPS enrollee refresh failed: %v\n", refreshErr)
 			}
 			nextRefresh = nextRefresh.Add(easyMeshPBCRefresh)
-			// The enrollee has now had a scan of its own. If it picked a Root on
-			// another channel there is nothing left to wait for.
-			//
-			// This is deliberately the ONLY channel reading taken. Onboarding used
-			// to arm a separate WPS scan up front purely to learn the Root's
-			// channel, and that probe left the Backhaul station armed-then-stopped
-			// and disabled -- measured, it is enough on its own to stop the real
-			// enrollee from ever associating, even with ApCliEnable=1 leading.
-			// The enrollee's own scan answers the same question for free.
-			if mismatch := easyMeshBackhaulChannelMismatchDuringOnboarding(band); mismatch != nil {
-				return lastStatus, mismatch
-			}
 			setEasyMeshJobStage("Waiting for the wireless backhaul")
 		}
 		time.Sleep(time.Second)
@@ -3093,6 +3083,123 @@ func waitForEasyMeshBackhaulDuringOnboarding(band string, timeout time.Duration)
 		lastStatus = "no status returned"
 	}
 	return lastStatus, fmt.Errorf("wireless backhaul did not connect within %s; the Agent kept its original management address and DHCP server", timeout.Round(time.Second))
+}
+
+// easyMeshMayAcceptDownstream reports whether this device can host the join of a
+// further Agent, and says why not when it cannot.
+//
+// An Agent has to be fully in the Mesh first. Its credential is the Root's,
+// received when it onboarded, and it has nothing to hand on before that; arming
+// WPS on its Radio any earlier would only take its own pairing apart.
+func easyMeshMayAcceptDownstream(cfg EasyMeshConfig, handoffReady bool) error {
+	if cfg.Role == "controller" {
+		return errors.New("the Root opens its own onboarding window; use Open wireless onboarding window instead")
+	}
+	if cfg.Role != "agent" || !cfg.Enabled {
+		return errors.New("only an Agent that has joined a Mesh can accept a further Agent")
+	}
+	if !handoffReady {
+		return errors.New("this Agent has not finished joining the Mesh yet; wait for its Backhaul and its Root-issued address before accepting a further Agent")
+	}
+	return nil
+}
+
+// acceptDownstreamMeshNode opens a WPS PBC window on THIS Agent's own Backhaul
+// BSS so a further Agent can join through it, extending the Mesh one hop.
+//
+// Only the Root used to be able to do this, which capped the Mesh at one hop: an
+// Agent could only pair with the Root's registrar, so it had to be inside the
+// Root's radio range no matter how far the chain was meant to reach. That is the
+// wrong limit for a tunnel, where reach is the whole point.
+//
+// Nothing about the credential changes. At BssidNum=1 this Agent's own BSS is
+// already a Multi-AP Backhaul AP (the BSS policy marks it "1 1"), and it already
+// carries the Root's Mesh credential -- pushed down when this Agent onboarded.
+// WscConfStatus=2 means "hand out the credential I am configured with", so the
+// M8 this Agent issues names the same Mesh the Root owns, and the joining Agent
+// lands on the same flat network with the Root's DHCP and the Root's 1905
+// controller.
+func acceptDownstreamMeshNode() error {
+	cfg := loadEasyMeshConfig()
+	if err := easyMeshMayAcceptDownstream(cfg, easyMeshAgentClientHandoffReady()); err != nil {
+		return err
+	}
+	if err := waitForEasyMeshSocket(35 * time.Second); err != nil {
+		return err
+	}
+
+	band, _, bandErr := easyMeshActiveBackhaulBandAssociated(cfg.BackhaulBand)
+	if bandErr != nil {
+		return fmt.Errorf("this Agent's own Backhaul is not up: %v", bandErr)
+	}
+
+	setEasyMeshJobStage("Opening wireless onboarding on this Agent's Radio")
+	baselineDevices := make(map[string]bool)
+	if topology, err := easyMeshLocalTopologySnapshot(); err == nil {
+		baselineDevices = easyMeshTopologyDeviceIDs(topology)
+	}
+	baselineStations := easyMeshBackhaulBSSStations(band)
+	if err := openControllerOnboardingWindow(band); err != nil {
+		return err
+	}
+	return maintainDownstreamOnboardingWindow(band, baselineStations, baselineDevices, easyMeshOnboardingWindow)
+}
+
+// maintainDownstreamOnboardingWindow keeps an Agent's PBC window alive and
+// reports whether a further Agent actually arrived.
+//
+// An Agent cannot verify the way the Root does: `config_renew` is the Root's
+// command, and the 1905 device list an Agent sees is not the authority on who is
+// in the Mesh. What it can see for itself is its own Radio -- a station that was
+// not associated when the window opened -- and it reports that. The Root's page
+// remains the place where the new Agent's management address and hop count show
+// up.
+func maintainDownstreamOnboardingWindow(band string, baselineStations int, baselineDevices map[string]bool, window time.Duration) error {
+	deadline := time.Now().Add(window)
+	nextRefresh := time.Now().Add(easyMeshPBCRefresh)
+	setEasyMeshJobStage("Wireless onboarding open for up to 5 minutes")
+
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fmt.Errorf("no further Mesh Agent joined through this Agent within the %s onboarding window", window.Round(time.Second))
+		}
+		delay := 5 * time.Second
+		if untilRefresh := time.Until(nextRefresh); untilRefresh > 0 && untilRefresh < delay {
+			delay = untilRefresh
+		}
+		if remaining < delay {
+			delay = remaining
+		}
+		time.Sleep(delay)
+
+		stations := easyMeshBackhaulBSSStations(band)
+		if stations >= 0 && baselineStations >= 0 && stations > baselineStations {
+			setEasyMeshJobStage("A device associated to this Agent's Backhaul; confirming it joined the Mesh")
+			if topology, err := easyMeshLocalTopologySnapshot(); err == nil {
+				for id := range easyMeshTopologyDeviceIDs(topology) {
+					if !baselineDevices[id] {
+						setEasyMeshJobStage("Further Mesh Agent joined through this Agent")
+						return nil
+					}
+				}
+			}
+			// Associated but not yet a 1905 device. Leave the window alone --
+			// re-arming here would tear the pairing down.
+			continue
+		}
+
+		if !time.Now().Before(nextRefresh) {
+			if easyMeshOnboardingWindowMayRearm("", baselineStations, stations) && time.Until(deadline) >= 2*time.Minute {
+				setEasyMeshJobStage("Keeping the wireless onboarding window open")
+				if err := openControllerOnboardingWindow(band); err != nil {
+					fmt.Printf("EasyMesh downstream onboarding refresh failed: %v\n", err)
+				}
+			}
+			nextRefresh = nextRefresh.Add(easyMeshPBCRefresh)
+			setEasyMeshJobStage("Wireless onboarding open for up to 5 minutes")
+		}
+	}
 }
 
 func easyMeshAgentClientHandoffApplied() bool {
@@ -3558,48 +3665,20 @@ func easyMeshBackhaulChannelFromScan(log string) (int, bool) {
 	return best, found
 }
 
-// easyMeshBackhaulChannelMismatchDuringOnboarding reports a disagreement the
-// enrollee has already found on its own.
+// Onboarding deliberately does NOT compare the Agent's channel with the Root's.
 //
-// The Backhaul station shares one DBDC Radio with this chassis' own AP, so it
-// cannot follow a Root on another channel. The enrollee logs the Root it picked
-// ("will connect <ssid> (<bssid>) on <ch>") and is then shut down by the driver,
-// after which nothing further is logged. Reading that one line turns the rest of
-// a five-minute wait into an immediate, actionable answer.
-func easyMeshBackhaulChannelMismatchDuringOnboarding(band string) error {
-	local, err := easyMeshLocalBackhaulChannel(band)
-	if err != nil {
-		return nil
-	}
-	out, execErr := easyMeshExecLocal("dmesg | grep 'will connect' | tail -n 5; true")
-	if execErr != nil {
-		return nil
-	}
-	rootChannel, ok := easyMeshBackhaulChannelFromScan(out)
-	if !ok {
-		return nil
-	}
-	return easyMeshBackhaulChannelMismatch(band, local, rootChannel)
-}
-
-// easyMeshBackhaulChannelMismatch decides whether two channels can carry a
-// Backhaul, and says what to do about it when they cannot.
+// It used to, and the check was wrong twice over. Its premise -- that a Backhaul
+// station cannot follow a Root on another channel -- was disproved by measurement
+// (both bands mismatched, the Backhaul paired and ran anyway; the station does
+// follow). And the reading itself came from `dmesg | grep 'will connect'`, which
+// is a ring buffer with no notion of age: it matched a line minutes old and
+// aborted an onboarding whose WPS exchange had already completed M2/M4/M6/M8 and
+// whose station was associated at 286 Mb/s.
 //
-// A deployment pins both units to one channel; nothing here moves a Radio. That
-// used to be done automatically and it was worse than it looked -- it rewrote the
-// Agent's driver profile and reloaded the Radio, taking every client of the
-// Agent's own AP on that band with it, and outliving the Mesh.
-func easyMeshBackhaulChannelMismatch(band string, local string, rootChannel int) error {
-	local = strings.TrimSpace(local)
-	if local == strconv.Itoa(rootChannel) {
-		return nil
-	}
-	return fmt.Errorf("this Agent's %s Radio is on channel %s but the Root's Backhaul is on channel %d. "+
-		"The Backhaul station shares one Radio with this chassis' own AP, so it cannot follow the Root. "+
-		"Set both units to the same non-DFS channel in WiFi configuration, then run onboarding again",
-		easyMeshBandLabel(band), local, rootChannel)
-}
-
+// Pinning both units to one channel is still worth doing for predictable
+// performance -- two Radios on ACS each pick their own, and the Backhaul drags
+// one of them across when it comes up -- but it is not a preconditon for joining,
+// and nothing here may fail an onboarding over it.
 func easyMeshBandLabel(band string) string {
 	if band == "2g" {
 		return "2.4GHz"

@@ -189,6 +189,10 @@ function meshActionObserved(next: MeshStatus, action: string, form: MeshForm): b
       return Boolean(
         next.config.onboarding_at && Date.now() / 1000 - next.config.onboarding_at < 360
       )
+    case 'accept_downstream':
+      // A pairing window is not a state the device settles into; the Root's page
+      // is where a new Agent shows up.
+      return false
     case 'leave':
     case 'disable':
       // The management plane is permanent, so a Leave no longer takes it away:
@@ -459,6 +463,19 @@ export default function EasyMesh() {
     }
   }
 
+  const acceptDownstream = async () => {
+    const confirmed = await confirmDialog({
+      title: 'Accept another Agent through this one?',
+      description:
+        "This opens a five-minute pairing window on this Agent's own Radio so a further Agent can join through it, extending the Mesh one hop. Run it here when the joining Agent is in range of this device but not of the Root. Only one pairing window may be open anywhere in the Mesh at a time, so close the Root's first.",
+      confirmText: 'Open window'
+    })
+    if (!confirmed) return
+    if (await postAction('accept_downstream')) {
+      toast.success('Pairing window opened on this Agent. Start onboarding on the joining Agent within five minutes.')
+    }
+  }
+
   const leaveMesh = async () => {
     const isController = status?.config.role === 'controller'
     const confirmed = await confirmDialog({
@@ -676,6 +693,25 @@ export default function EasyMesh() {
                 <Save /> Save configuration
               </Button>
             </div>
+            {status?.config.role === 'agent' && status.config.enabled ? (
+              <ActivationStep
+                number="3"
+                title="Extend the Mesh (optional)"
+                description="Open a pairing window on this Agent's own Radio so a further Agent can join through it. Use this when the joining Agent is in range of this device but not of the Root."
+                complete={false}
+                icon={<RadioTower className="size-4" />}
+                action={
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={busy || !status.client_handoff_ready}
+                    onClick={() => void acceptDownstream()}
+                  >
+                    Accept another Agent
+                  </Button>
+                }
+              />
+            ) : null}
           </div>
         </SectionCard>
 

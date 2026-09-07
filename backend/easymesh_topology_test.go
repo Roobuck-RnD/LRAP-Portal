@@ -433,7 +433,7 @@ func TestControllerTellsItsAgentsToLeave(t *testing.T) {
 		"de:84:03:11:57:80": {IP: "10.10.18.127"},
 		"de:84:03:11:57:81": {IP: "10.10.18.200"},
 	}
-	notified, unreachable := notifyPeersToLeaveVia(leases, "f0:a8:82:fb:00:a4")
+	notified, unreachable := notifyPeersToLeaveVia(leases, nil, "f0:a8:82:fb:00:a4")
 
 	if notified != 1 || unreachable != 1 {
 		t.Fatalf("notified=%d unreachable=%d, want one of each", notified, unreachable)
@@ -461,7 +461,7 @@ func TestControllerDoesNotAskItselfToLeave(t *testing.T) {
 		"f0:a8:82:fb:00:a4": {IP: "10.10.18.1"},
 		"de:84:03:11:57:80": {IP: "10.10.18.127"},
 	}
-	notified, _ := notifyPeersToLeaveVia(nodes, "f0:a8:82:fb:00:a4")
+	notified, _ := notifyPeersToLeaveVia(nodes, nil, "f0:a8:82:fb:00:a4")
 	if notified != 1 || len(asked) != 1 || asked[0] != "10.10.18.127" {
 		t.Fatalf("asked = %#v, want only the Agent", asked)
 	}
@@ -727,5 +727,35 @@ func TestALocallyKnownClientKeepsItsOwnIdentity(t *testing.T) {
 	graph := easyMeshTopologyGraphWithFabric(realTopologyDump(t), "f0:a8:82:fb:00:a4", nil, fabric)
 	if graph.Clients[0].IP != "10.10.18.100" || graph.Clients[0].Hostname != "DESKTOP-KC17O22" {
 		t.Fatalf("a known client was overwritten by a lease: %#v", graph.Clients[0])
+	}
+}
+
+// A chain has to be told to leave from the far end inwards. The Agent nearest
+// the Root carries every instruction meant for the Agents behind it, so telling
+// it first takes that path away and strands them in a Mesh with no Root -- the
+// lock-out this notification exists to prevent.
+func TestPeersAreToldToLeaveFurthestHopFirst(t *testing.T) {
+	nodes := map[string]easyMeshManagementNode{
+		"agent1": {IP: "10.10.18.127"},
+		"agent2": {IP: "10.10.18.128"},
+		"agent3": {IP: "10.10.18.129"},
+		"root":   {IP: "10.10.18.1"},
+		"gone":   {IP: ""},
+	}
+	distances := map[string]int{"agent1": 1, "agent2": 2, "agent3": 3}
+
+	order := easyMeshPeerLeaveOrder(nodes, distances, "root")
+	if got := strings.Join(order, ","); got != "agent3,agent2,agent1" {
+		t.Fatalf("leave order = %s, want the furthest hop first", got)
+	}
+
+	// An Agent with no hop count goes last: it is most likely a near one, and
+	// guessing wrong there costs less than stranding a far one.
+	order = easyMeshPeerLeaveOrder(nodes, map[string]int{"agent2": 2}, "root")
+	if order[0] != "agent2" {
+		t.Fatalf("leave order = %v, want the only known hop first", order)
+	}
+	if len(order) != 3 {
+		t.Fatalf("leave order = %v, want the Root and the address-less Agent left out", order)
 	}
 }
