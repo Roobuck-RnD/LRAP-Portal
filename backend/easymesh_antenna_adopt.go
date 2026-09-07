@@ -53,14 +53,102 @@ func adoptUntaggedAntennas() int {
 	if !antennaManagementIsIsolated() || !easyMeshManagementNetworkConfigured() {
 		return 0
 	}
-	orphans := easyMeshOrphanedAntennaPorts(managedAntennaLinkedPortIndexes(), discoverManagedAPs(true))
-	adopted := 0
-	for _, port := range orphans {
+	if len(easyMeshOrphanedAntennaPorts(managedAntennaLinkedPortIndexes(), discoverManagedAPs(true))) == 0 {
+		return 0
+	}
+
+	// A unit coming from the old arrangement still has its Antennas on the client
+	// LAN at 10.10.18.2-5, where they are reachable right now. Reconfiguring them
+	// in place is the whole migration -- no bridging trick, no window where the
+	// Antenna has no address.
+	adopted := migrateLegacyAddressedAntennas()
+
+	// Whatever is still missing is talking untagged with no address at all: a
+	// factory-fresh module, or one an older build restored. That one does need
+	// the port bridged across so the Antenna pool can answer it.
+	for _, port := range easyMeshOrphanedAntennaPorts(managedAntennaLinkedPortIndexes(), discoverManagedAPs(true)) {
 		if adoptUntaggedAntennaOnPort(port) {
 			adopted++
 		}
 	}
 	return adopted
+}
+
+// migrateLegacyAddressedAntennas moves Antennas that are still managed on the
+// client LAN onto the management VLAN.
+//
+// Every Antenna gets the same configuration, so which port an address belongs to
+// does not matter here; what matters is that each one that answers is given the
+// VLAN it should have been on.
+func migrateLegacyAddressedAntennas() int {
+	legacy := LegacyAPManagementIPs()
+	probeStaticIPs(legacy)
+
+	migrated := 0
+	for _, ip := range legacy {
+		if _, err := easyMeshExecLocal("ping -c 1 -W 2 " + ip + " >/dev/null 2>&1"); err != nil {
+			continue
+		}
+		log.Printf("Antenna management: %s is still on the client LAN; moving it to the management VLAN", ip)
+		if !applyAntennaManagementVLAN(ip) {
+			continue
+		}
+		migrated++
+	}
+	return migrated
+}
+
+// applyAntennaManagementVLAN puts one Antenna's MANAGEMENT traffic on VLAN 200
+// and makes sure its client traffic is untagged.
+//
+// Only management is tagged. Tagging clients too was a second arrangement that
+// had to be switched on and off with the Mesh, and while the two ends disagreed
+// every device behind the Antenna lost the network: associated, holding a stale
+// lease, no route to anything.
+//
+// Both commands end by reloading the Antenna's network, which drops the address
+// the reply travels over, so an ambiguous dispatch is not treated as failure --
+// see adoptUntaggedAntennaOnPort.
+func applyAntennaManagementVLAN(ip string) bool {
+	if _, err := easyMeshExecRemote(ip, easyMeshPrepareAntennaManagementCommand()); err != nil &&
+		!easyMeshRemoteDispatchResultAmbiguous(err) {
+		log.Printf("Antenna management: could not set the management VLAN on the Antenna at %s: %v", ip, err)
+		return false
+	}
+
+	// Client traffic is never tagged, in a Mesh or out of one, so this is a
+	// plain assertion rather than a choice that has to follow the chassis.
+	if _, err := easyMeshExecRemote(ip, easyMeshAntennaUntaggedClientCommand()); err != nil &&
+		!easyMeshRemoteDispatchResultAmbiguous(err) {
+		log.Printf("Antenna management: could not return client traffic to untagged for the Antenna at %s: %v", ip, err)
+		return false
+	}
+	return true
+}
+
+// easyMeshAntennaUntaggedClientCommand asserts the Antenna's client bridge:
+// eth1 plus both radios, untagged, with the management VLAN left alone. The
+// chassis' own LAN ports are untagged in a Mesh and out of one, so this is what
+// the Antenna carries for its whole life.
+func easyMeshAntennaUntaggedClientCommand() string {
+	return "set -e; test \"$(uci -q get network.@device[0].name)\" = br-lan; " +
+		"uci -q delete network.mesh_client_eth1 2>/dev/null || true; " +
+		"uci -q delete network.@device[0].ports; " +
+		"uci add_list network.@device[0].ports=eth1; " +
+		"uci add_list network.@device[0].ports=ra0; " +
+		"uci add_list network.@device[0].ports=rax0; " +
+		// The client side is a DHCP client of whichever chassis it is plugged
+		// into. Saying so here is what keeps a restore from leaving an Antenna
+		// on one of the retired fixed addresses: the pre-Mesh snapshot of a unit
+		// that has not been through this build still describes lan as static
+		// 10.10.18.2-5, and nothing else puts it back. Measured after a Leave --
+		// the Antenna sat on the old static address while the chassis' Antenna
+		// pool no longer served that network at all.
+		"uci set network.lan.proto=dhcp; " +
+		"uci -q delete network.lan.ipaddr 2>/dev/null || true; " +
+		"uci -q delete network.lan.netmask 2>/dev/null || true; " +
+		"uci -q delete network.lan.vendorid 2>/dev/null || true; " +
+		"uci commit network; ubus call network reload"
 }
 
 func adoptUntaggedAntennaOnPort(portIndex int) bool {
@@ -70,8 +158,21 @@ func adoptUntaggedAntennaOnPort(portIndex int) bool {
 	}
 	log.Printf("EasyMesh: %s has a linked Antenna the Mesh cannot see; adopting it onto the management VLAN", port)
 
+	// A port can only belong to one bridge. On a chassis whose LAN ports are
+	// still untagged the raw port sits in the client bridge, and brctl refuses
+	// with "Resource busy" -- so it is lent out and given back.
+	borrowedFromClientBridge := interfaceIsBridged(clientBridgeName, port)
+	if borrowedFromClientBridge {
+		if _, err := easyMeshExecLocal("brctl delif " + clientBridgeName + " " + port); err != nil {
+			log.Printf("EasyMesh: could not free %s from %s for adoption: %v", port, clientBridgeName, err)
+			return false
+		}
+	}
 	if _, err := easyMeshExecLocal("brctl addif " + AntennaManagementBridge + " " + port); err != nil {
 		log.Printf("EasyMesh: could not bridge %s for adoption: %v", port, err)
+		if borrowedFromClientBridge {
+			_, _ = easyMeshExecLocal("brctl addif " + clientBridgeName + " " + port)
+		}
 		return false
 	}
 	// The raw port must not be left in the management bridge: it carries the
@@ -81,6 +182,12 @@ func adoptUntaggedAntennaOnPort(portIndex int) bool {
 			log.Printf("EasyMesh: could not remove %s from %s after adoption: %v",
 				port, AntennaManagementBridge, err)
 		}
+		if borrowedFromClientBridge {
+			if _, err := easyMeshExecLocal("brctl addif " + clientBridgeName + " " + port); err != nil {
+				log.Printf("EasyMesh: could not return %s to %s after adoption: %v",
+					port, clientBridgeName, err)
+			}
+		}
 	}()
 
 	ip, err := waitForAdoptedAntennaAddress(easyMeshAntennaAdoptionTimeout)
@@ -89,19 +196,7 @@ func adoptUntaggedAntennaOnPort(portIndex int) bool {
 		return false
 	}
 
-	if _, err := easyMeshExecRemote(ip, easyMeshPrepareAntennaManagementCommand()); err != nil {
-		log.Printf("EasyMesh: could not restore the management VLAN on the Antenna at %s: %v", ip, err)
-		return false
-	}
-	// The trunk command ends by reloading the Antenna's network, which drops the
-	// very address the reply has to travel over -- the call reports "ubus bad
-	// result body=" on a change that in fact applied. Measured here: the Antenna
-	// came back correctly trunked on lanN.200 after exactly that error. So an
-	// ambiguous dispatch is not treated as failure; what settles it is whether
-	// the Antenna reappears on the tagged management VLAN.
-	if _, err := easyMeshExecRemote(ip, easyMeshActivateAntennaTrunkCommand()); err != nil &&
-		!easyMeshRemoteDispatchResultAmbiguous(err) {
-		log.Printf("EasyMesh: could not restore the client VLAN trunk on the Antenna at %s: %v", ip, err)
+	if !applyAntennaManagementVLAN(ip) {
 		return false
 	}
 	// Confirm it rather than assume it: the reply to the trunk command is

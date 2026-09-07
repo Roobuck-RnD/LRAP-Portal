@@ -131,13 +131,11 @@ interface InterfaceActionResponse {
 
 const FIXED_LAN_IP = '10.10.18.1'
 const INTERFACES_CACHE_KEY = 'network.interfaces'
-const REQUIRED_LAN_ADDRESSES = [
-  FIXED_LAN_IP,
-  '10.10.18.2',
-  '10.10.18.3',
-  '10.10.18.4',
-  '10.10.18.5'
-]
+// Only this device's own address has to live in the client LAN. The Antennas
+// used to sit at 10.10.18.2-5 and every subnet the operator could choose had to
+// keep room for them; they are now managed on their own VLAN, so holding the
+// client LAN to that shape would restrict it for no reason.
+const REQUIRED_LAN_ADDRESSES = [FIXED_LAN_IP]
 
 function formatUptime(seconds: number): string {
   if (!seconds) return '0s'

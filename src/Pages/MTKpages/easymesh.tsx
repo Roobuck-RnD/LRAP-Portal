@@ -90,7 +90,6 @@ type MeshStatus = {
   radio_prepared: boolean
   topology: string
   topology_graph: MeshTopologyGraph
-  client_vlan: number
   management_vlan: number
   management_subnet: string
   requires_separation: boolean
@@ -192,7 +191,9 @@ function meshActionObserved(next: MeshStatus, action: string, form: MeshForm): b
       )
     case 'leave':
     case 'disable':
-      return next.config.role === 'standalone' && !next.config.enabled && !next.config.network_prepared
+      // The management plane is permanent, so a Leave no longer takes it away:
+      // what makes a Leave complete is the node being standalone again.
+      return next.config.role === 'standalone' && !next.config.enabled
     default:
       return false
   }
@@ -413,7 +414,7 @@ export default function EasyMesh() {
     const confirmed = await confirmDialog({
       title: `Enable ${isAgent ? 'Mesh Agent' : 'Root Controller'}?`,
       description:
-        'This migrates client traffic to VLAN 100 and Antenna management to VLAN 200, reserves the shared Backhaul Radio, then reboots the hardware once to apply it. The reboot also restores the client WiFi, and activation resumes automatically afterwards — just reconnect to this WiFi once when it returns (no power cycle needed).',
+        'This reserves the shared Backhaul Radio, then reboots the hardware once to apply it. Antenna management already runs on its own VLAN and client traffic is not moved. The reboot also restores the client WiFi, and activation resumes automatically afterwards — just reconnect to this WiFi once when it returns (no power cycle needed).',
       confirmText: 'Enable Mesh'
     })
     if (!confirmed) return
@@ -421,7 +422,7 @@ export default function EasyMesh() {
       sessionStorage.setItem('meshNetworkTransitionPending', 'true')
       setTransition('radio_prepare')
       setTransitionCountdown(90)
-      toast.info('Enabling Mesh. The device migrates networks and reboots once — reconnect when the WiFi returns; activation continues on its own.')
+      toast.info('Enabling Mesh. The device prepares the Backhaul Radio and reboots once — reconnect when the WiFi returns; activation continues on its own.')
     }
   }
 
@@ -481,7 +482,7 @@ export default function EasyMesh() {
     const confirmed = await confirmDialog({
       title: 'Restore the pre-Mesh network?',
       description:
-        'This restores the backed-up network and DHCP configuration on every reachable Antenna first, then on the main module. Use it to recover from VLAN preparation before EasyMesh is enabled.',
+        'This restores the backed-up network and DHCP configuration on every reachable Antenna first, then on the main module. Use it to recover from a preparation that failed before EasyMesh was enabled.',
       confirmText: 'Restore network',
       destructive: true
     })
@@ -609,16 +610,16 @@ export default function EasyMesh() {
           }
         />
         <StatCard
-          label="Network planes"
-          value={status?.config.network_prepared ? 'Separated' : 'Legacy'}
+          label="Antenna management"
+          value={status?.config.network_prepared ? `VLAN ${status.management_vlan}` : 'Unavailable'}
           detail={
             status?.config.network_prepared
               ? status.config.role === 'agent' && status.config.enabled
                 ? status.client_handoff_ready
                   ? `Root managed · ${status.management_ip || 'DHCP address assigned'}`
                   : 'Local recovery network until pairing is verified'
-                : `Client VLAN ${status.client_vlan} · Management VLAN ${status.management_vlan}`
-              : 'Preparation required'
+                : `${status.management_subnet || '172.31.255.0/29'} · clients untagged`
+              : 'Management VLAN is down'
           }
         />
       </div>
@@ -689,8 +690,8 @@ export default function EasyMesh() {
               title="Enable Mesh"
               description={
                 status?.config.enabled
-                  ? `VLANs separated (clients on VLAN ${status?.client_vlan || 100}, Antennas on ${status?.management_subnet || '172.31.255.0/29'}), the Mesh Radio is prepared, and the EasyMesh engine is running.`
-                  : 'One click: separate client/management VLANs, prepare the main module Radio for the Backhaul, and start the engine. The device reboots once to apply it and restore WiFi; activation resumes automatically, so reconnect to this WiFi only once (no power cycle).'
+                  ? `Antenna management is on its own VLAN (${status?.management_subnet || '172.31.255.0/29'}), client traffic rides the Backhaul untagged, the Mesh Radio is prepared, and the EasyMesh engine is running.`
+                  : 'One click: prepare the main module Radio for the Backhaul and start the engine. Client traffic is never interrupted. The device reboots once to apply it and restore WiFi; activation resumes automatically, so reconnect to this WiFi only once (no power cycle).'
               }
               complete={Boolean(status?.config.enabled)}
               icon={<Activity className="size-4" />}
@@ -873,7 +874,7 @@ export default function EasyMesh() {
             >
               Leave Mesh & Restore Standalone
             </Button>
-          ) : (status?.config.network_prepared || status?.job.error) ? (
+          ) : status?.job.error ? (
             <Button
               variant="destructiveOutline"
               size="sm"

@@ -19,8 +19,12 @@ const ACManagementIP = "10.10.18.1"
 const (
 	AntennaManagementACIP   = "172.31.255.1"
 	AntennaManagementBridge = "br-mgmt"
-	AntennaManagementMarker = "/etc/roobuck/easymesh_network_v1"
 )
+
+// Legacy marker recording that a Mesh migration completed. Isolation is decided
+// from the network configuration now; this remains only as a fallback for a unit
+// whose configuration cannot be read. A var so tests can point it elsewhere.
+var AntennaManagementMarker = "/etc/roobuck/easymesh_network_v1"
 
 // apManagementIPs 是各子模块(AP)的固定管理 IP。AC LAN 口接 AP WAN 口,
 // AP 使用这些静态地址。整套绑定在 10.10.18.0/24 管理网。
@@ -38,7 +42,20 @@ var isolatedAPManagementIPs = []string{
 	"172.31.255.5",
 }
 
+// antennaManagementIsIsolated reports whether Antenna management runs on its own
+// VLAN rather than on the client LAN.
+//
+// This asks the network configuration, not a marker file. The marker only ever
+// recorded "a Mesh migration completed here", which stops being the right
+// question once the management VLAN is the ordinary arrangement rather than
+// something Mesh switches on: a chassis that has the VLAN configured manages its
+// Antennas over it whether or not it has ever been in a Mesh. The marker is
+// still written and still consulted as a fallback so a unit whose
+// configuration read fails does not silently change planes.
 var antennaManagementIsIsolated = func() bool {
+	if easyMeshManagementNetworkConfigured() {
+		return true
+	}
 	_, err := os.Stat(AntennaManagementMarker)
 	return err == nil
 }

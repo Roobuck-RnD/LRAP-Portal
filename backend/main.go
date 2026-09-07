@@ -264,11 +264,18 @@ func main() {
 	log.SetPrefix("[lrapServer] ")
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
+	// Antenna management lives on its own VLAN permanently, not only while a Mesh
+	// is up. The order below matters: the VLAN has to exist before the DHCP pool
+	// can be bound to it, and the pool has to be serving before an Antenna that is
+	// still untagged can be answered and migrated across.
+	ensureAntennaManagementVLAN()
 	// Enforce the private Antenna DHCP pool before accepting API requests. This
 	// also migrates older scalar tag options to the UCI list form required by
 	// OpenWrt's dnsmasq generator and asynchronously repairs any Antenna lease
 	// that previously escaped into the ordinary client pool.
 	repairProtectedDHCPAtStartup()
+	migrateUntaggedAntennasAtStartup()
+	alignAntennaClientPlanes()
 	// The client bridge must keep one hardware address for its whole life, or the
 	// DHCP lease it holds — and any static reservation made for it — follows the
 	// bridge membership around instead of the device.
