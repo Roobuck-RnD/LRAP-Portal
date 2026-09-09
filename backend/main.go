@@ -284,10 +284,10 @@ func main() {
 		log.Printf("MediaTek wifi reload compatibility check failed: %v", err)
 	}
 	resumeEasyMeshAtStartup()
-	// A network reload silently drops the Backhaul station out of the client
-	// bridge while every "is the Backhaul up" signal keeps saying yes, so an Agent
-	// has to keep watching its own bridge.
-	startBackhaulBridgeWatchdog()
+	// A network reload silently drops this chassis's own radios and Backhaul
+	// stations out of the client bridge while every "is it up" signal keeps saying
+	// yes, so the bridge has to be watched for the life of the process.
+	startClientBridgeWatchdog()
 
 	mux := http.NewServeMux()
 
