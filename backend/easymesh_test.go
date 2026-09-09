@@ -1471,3 +1471,55 @@ func TestOnlyAJoinedAgentCanHostTheNextHop(t *testing.T) {
 		t.Fatalf("the Root was not pointed at its own action: %v", err)
 	}
 }
+
+// A joined Agent must be reachable in the topology whatever its DHCP lease calls
+// it. Measured on the live three-node Mesh: both Agents had
+// network.lan.hostname=RoobuckAC, but one lease carried the hostname and the
+// other carried "*", and the Root drew that second Agent — reachable, healthy,
+// correctly reporting its AL-MAC — as having no management address at all.
+func TestAnAgentIsFoundEvenWhenItsLeaseHasNoHostname(t *testing.T) {
+	const topology = `{"topology information":[
+{"AL MAC":"f2:a8:82:fb:00:a4","Device role":"01","Radio Info":[
+ {"band":"5G","BSSINFO":[{"BSSID":"f2:a8:82:fb:00:a4","SSID":"Roobuck-BH-FB00A4"}]},
+ {"band":"2G","BSSINFO":[{"BSSID":"f0:a8:82:fb:00:a4","SSID":"Roobuck-BH-FB00A4"}]}]},
+{"AL MAC":"f2:a8:82:fb:01:1c","Device role":"02","Radio Info":[
+ {"band":"5G","BSSINFO":[{"BSSID":"f2:a8:82:fb:01:1c","SSID":"Roobuck-BH-FB00A4"}]},
+ {"band":"2G","BSSINFO":[{"BSSID":"f0:a8:82:fb:01:1c","SSID":"Roobuck-BH-FB00A4"}]}]}]}`
+
+	macs := easyMeshChassisMACsFromTopology(topology)
+	// The Agent's client bridge is pinned to its 2.4GHz Radio, so that is the
+	// address its Root-issued lease is held under.
+	if !macs["f0:a8:82:fb:01:1c"] {
+		t.Fatalf("the Agent's Radio MAC is not recognised as a chassis: %v", macs)
+	}
+	if !macs["f2:a8:82:fb:01:1c"] {
+		t.Fatal("the Agent's AL-MAC is not recognised as a chassis")
+	}
+	// A client that happens to hold a lease is not a chassis.
+	if macs["02:5e:9a:1f:09:51"] {
+		t.Fatal("a MAC absent from the topology was treated as a chassis")
+	}
+	if got := easyMeshChassisMACsFromTopology("not json"); len(got) != 0 {
+		t.Fatalf("unparseable topology produced chassis MACs: %v", got)
+	}
+}
+
+// The lease filter decides who is asked to identify itself. It must not turn an
+// Agent away for the hostname its DHCP client happened to send.
+func TestTheManagementLeaseFilterDoesNotRelyOnTheHostname(t *testing.T) {
+	source, err := os.ReadFile("easymesh.go")
+	if err != nil {
+		t.Fatalf("read easymesh.go: %v", err)
+	}
+	body := string(source)
+	if strings.Contains(body, `!strings.EqualFold(fields[3], "RoobuckAC") || net.ParseIP`) {
+		t.Fatal("the hostname is a hard requirement again; an Agent whose lease has no hostname disappears from management")
+	}
+	if !strings.Contains(body, `!chassisMACs[strings.ToLower(fields[1])]`) {
+		t.Fatal("the lease filter no longer accepts a MAC the Mesh topology attributes to a chassis")
+	}
+	// Widening the filter is only safe because identity is still verified.
+	if !strings.Contains(body, "easyMeshManagementIdentityAt(ip)") {
+		t.Fatal("a probed lease is no longer asked to identify itself")
+	}
+}

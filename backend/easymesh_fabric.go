@@ -389,14 +389,16 @@ var easyMeshRequestPeerLeave = func(ip string) error {
 // failures is returned for the caller to report rather than swallowed.
 func notifyPeersToLeave() (notified int, unreachable int) {
 	distances := make(map[string]int)
+	chassisMACs := map[string]bool{}
 	if topology, err := easyMeshLocalTopologySnapshot(); err == nil {
+		chassisMACs = easyMeshChassisMACsFromTopology(topology)
 		for _, node := range easyMeshRemoteNodesFromTopology(topology, easyMeshDHCPLeasesByMAC()) {
 			if hops, err := strconv.Atoi(strings.TrimSpace(node.Distance)); err == nil {
 				distances[node.ALID] = hops
 			}
 		}
 	}
-	return notifyPeersToLeaveVia(easyMeshManagementNodesByALID(), distances, easyMeshLocalALID())
+	return notifyPeersToLeaveVia(easyMeshManagementNodesByALID(chassisMACs), distances, easyMeshLocalALID())
 }
 
 // easyMeshPeerLeaveOrder puts the Agents furthest from the Root first.

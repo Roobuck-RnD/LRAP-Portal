@@ -449,7 +449,7 @@ func getEasyMeshStatus() EasyMeshStatus {
 			// Agent's dump simply lists itself first rather than the Controller.
 			management := map[string]easyMeshManagementNode{}
 			if cfg.Role == "controller" {
-				management = easyMeshManagementNodesByALID()
+				management = easyMeshManagementNodesByALID(easyMeshChassisMACsFromTopology(topology))
 				status.RemoteNodes = easyMeshRemoteNodesFromTopologyWithManagement(
 					topology,
 					easyMeshDHCPLeasesByMAC(),
@@ -990,7 +990,49 @@ var easyMeshLeaseBelongsToChassis = func(ip string, alID string) bool {
 	return strings.EqualFold(strings.TrimSpace(reported), strings.TrimSpace(alID))
 }
 
-func easyMeshManagementNodesByALID() map[string]easyMeshManagementNode {
+// easyMeshChassisMACsFromTopology returns every MAC the Mesh itself attributes
+// to a member chassis: each 1905 device's AL-MAC and every BSSID its Radios
+// publish. A joined Agent takes its Root-issued lease on one of those BSSIDs --
+// the client bridge is pinned to the Radio's address -- so this is what lets a
+// lease be recognised as a chassis without trusting what it called itself.
+func easyMeshChassisMACsFromTopology(raw string) map[string]bool {
+	macs := make(map[string]bool)
+	topology, err := parseEasyMeshTopology(raw)
+	if err != nil {
+		return macs
+	}
+	add := func(mac string) {
+		mac = strings.ToLower(strings.TrimSpace(mac))
+		if _, err := net.ParseMAC(mac); err == nil {
+			macs[mac] = true
+		}
+	}
+	for _, device := range topology.Devices {
+		add(device.ALMAC)
+		for _, radio := range device.RadioInfo {
+			for _, bss := range radio.BSSInfo {
+				add(bss.BSSID)
+			}
+		}
+	}
+	return macs
+}
+
+// easyMeshManagementNodesByALID maps each Mesh chassis's AL-MAC to the address
+// it can be managed on.
+//
+// chassisMACs comes from the Mesh's own topology and may be empty. A lease is
+// probed when it either calls itself RoobuckAC or is held by a MAC the topology
+// attributes to a member chassis -- the hostname alone is not enough. Measured
+// on the live three-node Mesh: one Agent's lease carried the hostname and the
+// other's carried "*", though both had network.lan.hostname=RoobuckAC, and that
+// second Agent was reachable, healthy and reporting its AL-MAC correctly while
+// the Root drew it as having no management address at all.
+//
+// Widening the filter cannot mis-attribute an address: every candidate is still
+// asked to identify itself, and only its own answer decides which AL-MAC the
+// address is filed under. This only decides who gets asked.
+func easyMeshManagementNodesByALID(chassisMACs map[string]bool) map[string]easyMeshManagementNode {
 	nodes := make(map[string]easyMeshManagementNode)
 	raw, err := os.ReadFile("/tmp/dhcp.leases")
 	if err != nil {
@@ -998,7 +1040,10 @@ func easyMeshManagementNodesByALID() map[string]easyMeshManagementNode {
 	}
 	for _, line := range strings.Split(string(raw), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 4 || !strings.EqualFold(fields[3], "RoobuckAC") || net.ParseIP(fields[2]) == nil {
+		if len(fields) < 4 || net.ParseIP(fields[2]) == nil {
+			continue
+		}
+		if !strings.EqualFold(fields[3], "RoobuckAC") && !chassisMACs[strings.ToLower(fields[1])] {
 			continue
 		}
 		ip := fields[2]
@@ -3262,7 +3307,7 @@ func maintainControllerOnboardingWindow(band string, baseline map[string]bool, w
 		time.Sleep(delay)
 
 		if topology, err := easyMeshLocalTopologySnapshot(); err == nil {
-			management := easyMeshManagementNodesByALID()
+			management := easyMeshManagementNodesByALID(easyMeshChassisMACsFromTopology(topology))
 			nodes := easyMeshRemoteNodesFromTopologyWithManagement(topology, easyMeshDHCPLeasesByMAC(), management)
 			matched := false
 			for _, node := range nodes {
