@@ -269,6 +269,10 @@ func main() {
 	// can be bound to it, and the pool has to be serving before an Antenna that is
 	// still untagged can be answered and migrated across.
 	ensureAntennaManagementVLAN()
+	// A chassis built before the Antenna ports were pinned down carries a tagged
+	// management leg on every LAN port, including the one reserved for ordinary
+	// customer equipment. Take those back.
+	narrowAntennaManagementVLAN()
 	// Enforce the private Antenna DHCP pool before accepting API requests. This
 	// also migrates older scalar tag options to the UCI list form required by
 	// OpenWrt's dnsmasq generator and asynchronously repairs any Antenna lease
@@ -283,11 +287,21 @@ func main() {
 	if err := ensureLocalMediaTekWiFiServicesCompatibility(); err != nil {
 		log.Printf("MediaTek wifi reload compatibility check failed: %v", err)
 	}
+	// Before anything runs the vendor EasyMesh script, make it able to find the
+	// client bridge again: its own scan matches our Antenna management bridge too,
+	// which leaves it unable to bridge this chassis's radios at all.
+	repairVendorBridgeSelection()
 	resumeEasyMeshAtStartup()
 	// A network reload silently drops this chassis's own radios and Backhaul
 	// stations out of the client bridge while every "is it up" signal keeps saying
 	// yes, so the bridge has to be watched for the life of the process.
 	startClientBridgeWatchdog()
+	// An Antenna plugged into a running chassis cannot get onto the management
+	// VLAN by itself, and the startup pass has long since been and gone.
+	startAntennaAdoptionScan()
+	// An Agent takes its Root-issued address with a one-shot udhcpc, so nothing
+	// renews it and the Root drops the lease twelve hours later. Keep it alive.
+	startAgentLeaseRefresh()
 
 	mux := http.NewServeMux()
 

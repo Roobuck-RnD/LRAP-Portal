@@ -116,13 +116,6 @@ function roleLabel(role: MeshRole): string {
   return 'Standalone'
 }
 
-function backhaulMediumMatchesBand(medium: string, band: '2g' | '5g'): boolean {
-  const normalized = medium.toLowerCase().replace(/\s+/g, '')
-  return band === '2g'
-    ? normalized.includes('2.4') || normalized === '2g' || normalized === '24g'
-    : normalized.includes('5g')
-}
-
 function agentCount(status: MeshStatus): number {
   return (status.remote_nodes || []).length
 }
@@ -317,14 +310,24 @@ export default function EasyMesh() {
     pendingAction && (!status?.job.id || status.job.id < pendingAction.jobID)
   )
   const busy = submitting || pendingAwaitingStatus || Boolean(status?.job.running)
+  // An Agent that is connected and reachable for management has joined,
+  // whichever Radio the Mesh engine ended up putting its Backhaul on. Requiring
+  // the band to match the one pairing started on made this both wrong and
+  // accidental: it left the tick off for an Agent whose link the engine had
+  // moved to 2.4GHz.
+  //
+  // This answers "has the Root ever paired?" and nothing more. It marks the step
+  // done; it must never decide whether the button may be pressed. Those were the
+  // same expression once, and the Root could then open exactly one pairing window
+  // for its lifetime: the moment the first Agent came up the button went grey and
+  // a second one could never be added to the Root at all. The backend has no such
+  // limit — triggerEasyMeshOnboarding takes a fresh topology baseline each time,
+  // so a repeat window detects the next chassis the same way the first one did.
+  // A window that is open right now is already covered by `busy`, because
+  // maintainControllerOnboardingWindow holds the job for the full five minutes.
   const controllerPairingComplete = Boolean(
     status?.config.role === 'controller' &&
-      (status.remote_nodes || []).some(
-        (node) =>
-          node.connected &&
-          node.management_online &&
-          backhaulMediumMatchesBand(node.backhaul_medium, status.config.backhaul_band)
-      )
+      (status.remote_nodes || []).some((node) => node.connected && node.management_online)
   )
 
   const postAction = async (action: string, includeForm = false) => {
@@ -479,11 +482,13 @@ export default function EasyMesh() {
   const leaveMesh = async () => {
     const isController = status?.config.role === 'controller'
     const confirmed = await confirmDialog({
-      title: 'Leave EasyMesh and restore standalone mode?',
+      title: isController
+        ? 'Dissolve the Mesh and restore standalone mode?'
+        : 'Leave the Mesh and restore standalone mode?',
       description: isController
         ? 'Each Agent is told to return to standalone first, then this device stops the Root Mesh role and restores its own backed-up standalone network and Antennas. An Agent that is already out of contact will not receive the instruction and has to be restored from its own portal. WiFi and this management session will disconnect.'
         : 'This stops the Mesh Agent and restores the backed-up standalone network on this complete device and its Antennas. WiFi and this management session will disconnect; reconnect to its original WiFi afterward.',
-      confirmText: 'Leave Mesh',
+      confirmText: isController ? 'Dissolve Mesh' : 'Leave Mesh',
       destructive: true
     })
     if (!confirmed) return
@@ -667,24 +672,28 @@ export default function EasyMesh() {
               </p>
             </div>
 
-            <div className="grid gap-2">
-              <Label htmlFor="mesh-band">Shared Backhaul + Fronthaul Radio</Label>
-              <NativeSelect
-                id="mesh-band"
-                value={form.backhaulBand}
-                disabled={busy || form.role === 'standalone' || Boolean(status?.config.enabled)}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    backhaulBand: event.target.value as '2g' | '5g'
-                  }))
-                }
-              >
-                <option value="5g">5GHz · Recommended</option>
-                <option value="2g">2.4GHz · Longer range, lower capacity</option>
-              </NativeSelect>
+            {/*
+              There is deliberately no Radio to choose here.
+              Both sides of a pairing have to agree on one Radio, and WPS PBC
+              tolerates exactly one PBC-active AP in range, so arming both bands
+              is not an option -- measured on the live Mesh, arming both stations
+              produced no connection attempt at all while arming one paired
+              immediately in the same window. Two chassis set differently
+              therefore could not pair, and nothing in the pairing could detect
+              or repair it. The band is fixed at 5GHz for the whole product,
+              matching what the factory images already prefer.
+
+              Both Radios stay enabled: this only decides where pairing starts.
+              The Mesh engine moves the Backhaul to whichever band it prefers
+              afterwards -- measured, it moved a 5GHz link to 2.4GHz because the
+              signal there was 13 dB better -- and the card below reports the
+              band it is actually on.
+            */}
+            <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5">
               <p className="text-xs text-muted-foreground">
-                Backhaul is restricted to the selected Radio. Client Fronthaul remains available on both bands.
+                <span className="font-medium text-foreground">Backhaul Radio</span> · pairing always starts on
+                5GHz, the same on every chassis. The Mesh engine may move the live Backhaul to 2.4GHz when the
+                signal is better there; both Radios stay enabled.
               </p>
             </div>
 
@@ -751,7 +760,9 @@ export default function EasyMesh() {
               description={
                 status?.config.role === 'agent'
                   ? 'Join within five minutes; only a verified wireless backhaul triggers DHCP handoff.'
-                  : 'Open the PBC window, then start onboarding on one Agent within five minutes.'
+                  : controllerPairingComplete
+                    ? 'Open the window again to add a further Agent directly to the Root, then start onboarding on that Agent within five minutes. Only one pairing window may be open anywhere in the Mesh at a time.'
+                    : 'Open the PBC window, then start onboarding on one Agent within five minutes.'
               }
               complete={Boolean(
                 status?.config.enabled &&
@@ -763,14 +774,14 @@ export default function EasyMesh() {
               action={
                 <Button
                   size="sm"
-                  disabled={
-                    busy ||
-                    !status?.config.enabled ||
-                    (status.config.role === 'controller' && controllerPairingComplete)
-                  }
+                  disabled={busy || !status?.config.enabled}
                   onClick={() => void startOnboarding()}
                 >
-                  {status?.config.role === 'agent' ? 'Join Root' : 'Start onboarding'}
+                  {status?.config.role === 'agent'
+                    ? 'Join Root'
+                    : controllerPairingComplete
+                      ? 'Add another Agent'
+                      : 'Start onboarding'}
                 </Button>
               }
             />
@@ -899,7 +910,9 @@ export default function EasyMesh() {
         <Unplug className="mt-0.5 size-4 shrink-0 text-warning" />
         <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-muted-foreground">
-            An Agent keeps its original management address and DHCP server until the selected wireless backhaul is verified. Leaving Mesh restores the complete pre-Mesh network backup.
+            {status?.config.role === 'controller'
+              ? 'Dissolving the Mesh tells every Agent to return to standalone first, furthest hop first, then restores this device. An Agent already out of contact keeps running and has to be returned from its own page.'
+              : 'Leaving takes only this device out; the rest of the Mesh carries on. An Agent keeps its original management address and DHCP server until the wireless backhaul is verified, and the complete pre-Mesh network backup is restored on the way out.'}
           </p>
           {status?.config.enabled ? (
             <Button
@@ -908,7 +921,16 @@ export default function EasyMesh() {
               disabled={busy}
               onClick={() => void leaveMesh()}
             >
-              Leave Mesh & Restore Standalone
+              {/*
+                The same action, but its reach depends on who runs it: the Root
+                tells every Agent to leave before tearing itself down, while an
+                Agent only takes itself out and the Mesh carries on. One label
+                for both made a button that dissolves the whole fabric look like
+                the button that removes one node.
+              */}
+              {status.config.role === 'controller'
+                ? 'Dissolve Mesh & Restore Standalone'
+                : 'Leave Mesh & Restore Standalone'}
             </Button>
           ) : status?.job.error ? (
             <Button

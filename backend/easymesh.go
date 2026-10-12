@@ -19,8 +19,11 @@ import (
 	"time"
 )
 
+// Where this chassis's Mesh state lives. A variable, not a constant, so a test
+// can point it at a temporary file instead of the real one.
+var easyMeshStatePath = "/etc/roobuck/easymesh.json"
+
 const (
-	easyMeshStatePath       = "/etc/roobuck/easymesh.json"
 	easyMeshMigrationPath   = "/etc/roobuck/easymesh_migration.json"
 	easyMeshMapdUserPath    = "/etc/map/mapd_user.cfg"
 	easyMeshMapdDefaultPath = "/etc/map/mapd_default.cfg"
@@ -212,7 +215,7 @@ func defaultEasyMeshConfig() EasyMeshConfig {
 	return EasyMeshConfig{
 		Version:         1,
 		Role:            "standalone",
-		BackhaulBand:    "5g",
+		BackhaulBand:    easyMeshPairingBand,
 		NetworkPrepared: easyMeshNetworkReadyForMesh(),
 	}
 }
@@ -224,6 +227,28 @@ func easyMeshOwnsWiFi() bool {
 	job := currentEasyMeshJob()
 	return job.Running && (job.Action == "activate" || job.Action == "onboard")
 }
+
+// easyMeshPairingBand is the Radio every chassis opens its pairing window on and
+// every joining chassis knocks on. It is fixed for the whole product and is not
+// an operator setting.
+//
+// It used to be selectable per chassis, and that choice was the source of a
+// whole family of faults rather than a feature. Both sides of a pairing have to
+// agree on one Radio -- WPS PBC tolerates exactly one PBC-active AP in range, so
+// arming both bands is not an option (measured: arming both stations produced no
+// connection attempt at all, while arming one paired immediately in the same
+// window). Two chassis configured differently therefore simply cannot pair, and
+// nothing in the pairing itself can detect or repair that.
+//
+// 5GHz because it is what the factory images already prefer (BhPriority2G=3 Low,
+// 5GL/5GH=1 High), so this agrees with the vendor stack rather than fighting it.
+//
+// This is only where pairing STARTS. mapd runs AutoBHSwitching and moves the
+// Backhaul to whichever band it prefers afterwards -- measured, it moved a 5GHz
+// link to 2.4GHz because the signal there was 13 dB better -- and that fallback
+// is worth keeping, so both Radios stay enabled and every check that looks at
+// the Backhaul follows the band it is actually on.
+const easyMeshPairingBand = "5g"
 
 func loadEasyMeshConfig() EasyMeshConfig {
 	cfg := defaultEasyMeshConfig()
@@ -237,6 +262,10 @@ func loadEasyMeshConfig() EasyMeshConfig {
 	if cfg.Version == 0 {
 		cfg.Version = 1
 	}
+	// A chassis configured by an older build may carry the other band. Correct it
+	// here rather than at every use, so one stored value cannot keep a unit from
+	// pairing with the rest of the Mesh.
+	cfg.BackhaulBand = easyMeshPairingBand
 	cfg.NetworkPrepared = easyMeshNetworkReadyForMesh()
 	return cfg
 }
@@ -318,18 +347,13 @@ func normalizeAndValidateEasyMeshConfig(cfg *EasyMeshConfig, req easyMeshRequest
 	if role != "controller" && role != "agent" && role != "standalone" {
 		return errors.New("role must be standalone, controller, or agent")
 	}
-	band := strings.ToLower(strings.TrimSpace(req.BackhaulBand))
-	if band == "" {
-		band = "5g"
-	}
-	if band != "2g" && band != "5g" {
-		return errors.New("backhaul band must be 2g or 5g")
-	}
+	// The Backhaul band is not an operator setting: see easyMeshPairingBand. A
+	// band in the request is accepted and ignored so an older page still saves.
 	// The Backhaul is carried by this device's own Radio, so there is nothing
 	// remote to validate here. Antennas stay plain client APs and are never part
 	// of the Mesh.
 	cfg.Role = role
-	cfg.BackhaulBand = band
+	cfg.BackhaulBand = easyMeshPairingBand
 	return nil
 }
 
@@ -747,6 +771,25 @@ type easyMeshManagementNode struct {
 	NodeID string
 }
 
+// easyMeshDeviceReachesNeighbourOverWire reports whether device reaches the
+// given neighbour over an Ethernet Backhaul rather than a wireless one.
+//
+// This is what separates the two halves of one chassis from two chassis that
+// are one hop apart: a main module and its wireless half are cabled together,
+// while the next Agent in a chain is associated to this one's Backhaul BSS.
+// Both appear as a downstream 1905 device with this device as their upstream.
+func easyMeshDeviceReachesNeighbourOverWire(device easyMeshTopologyDevice, neighbourALID string) bool {
+	for _, link := range device.BackhaulInfo {
+		if !strings.EqualFold(strings.TrimSpace(link.NeighborAL), neighbourALID) {
+			continue
+		}
+		return strings.EqualFold(strings.TrimSpace(link.Medium), "Ethernet")
+	}
+	// No link to that neighbour is described at all, so nothing says these are
+	// one chassis. Leaving the address unresolved beats attributing it wrongly.
+	return false
+}
+
 func easyMeshRemoteNodesFromTopology(raw string, leaseByMAC map[string]string) []EasyMeshRemoteNode {
 	return easyMeshRemoteNodesFromTopologyWithManagement(raw, leaseByMAC, nil)
 }
@@ -804,12 +847,23 @@ func easyMeshRemoteNodesFromTopologyWithManagement(raw string, leaseByMAC map[st
 		// MediaTek reports the complete Agent's main module as a separate
 		// downstream 1905 device. Prefer that Ethernet-adjacent AL-MAC over the
 		// legacy "Other Clients Info" heuristic, which is absent on this SDK.
+		//
+		// Only a downstream device WIRED to this one is the same chassis's other
+		// half. One that reaches it over a wireless Backhaul is the next hop in the
+		// Mesh, and adopting that hands this Agent its neighbour's management
+		// address. Measured the first time a real two-hop chain existed: the Root
+		// drew both Agents at the second Agent's address, so the middle of the
+		// chain was unreachable from the page that claimed to reach it.
 		if chassisALID == "" {
 			for _, candidate := range topology.Devices {
-				if strings.EqualFold(strings.TrimSpace(candidate.UpstreamALID), wirelessALID) {
-					chassisALID = strings.ToLower(strings.TrimSpace(candidate.ALMAC))
-					break
+				if !strings.EqualFold(strings.TrimSpace(candidate.UpstreamALID), wirelessALID) {
+					continue
 				}
+				if !easyMeshDeviceReachesNeighbourOverWire(candidate, wirelessALID) {
+					continue
+				}
+				chassisALID = strings.ToLower(strings.TrimSpace(candidate.ALMAC))
+				break
 			}
 		}
 
@@ -1032,13 +1086,47 @@ func easyMeshChassisMACsFromTopology(raw string) map[string]bool {
 // Widening the filter cannot mis-attribute an address: every candidate is still
 // asked to identify itself, and only its own answer decides which AL-MAC the
 // address is filed under. This only decides who gets asked.
-func easyMeshManagementNodesByALID(chassisMACs map[string]bool) map[string]easyMeshManagementNode {
-	nodes := make(map[string]easyMeshManagementNode)
-	raw, err := os.ReadFile("/tmp/dhcp.leases")
+// easyMeshNeighbourTable returns the kernel's IPv4 neighbour cache. A variable
+// so a test can supply one.
+var easyMeshNeighbourTable = func() string {
+	out, err := easyMeshExecLocal("ip -4 neigh show")
 	if err != nil {
-		return nodes
+		return ""
 	}
-	for _, line := range strings.Split(string(raw), "\n") {
+	return out
+}
+
+// easyMeshManagementCandidates lists the addresses worth asking to identify
+// themselves, from both places this chassis can learn one.
+//
+// DHCP leases used to be the only source, and that made management of a healthy
+// Agent expire along with its lease. The Root hands out twelve-hour leases and
+// the handoff takes its address with a one-shot udhcpc, so twelve hours after
+// joining, an Agent still associated, still answering and still in the 1905
+// topology simply vanished from the Root: no Antenna list, no link to its page,
+// and -- worst -- a Leave that skipped it without counting it as unreachable,
+// stranding it as an Agent with no DHCP server of its own. Measured on the live
+// Mesh exactly twelve hours after that Agent joined.
+//
+// The neighbour cache does not lapse on a lease timer, so a chassis the Root is
+// still exchanging frames with is still listed there. Only MACs the Mesh's own
+// topology attributes to a member chassis are taken from it.
+//
+// Leases come first: when both know an address, the lease is the one the Root
+// issued on purpose. Identity is verified either way, so a candidate from the
+// wrong place cannot be mis-attributed -- it can only be asked and ignored.
+func easyMeshManagementCandidates(leases string, neighbours string, chassisMACs map[string]bool) []string {
+	candidates := make([]string, 0, 4)
+	seen := make(map[string]bool)
+	add := func(ip string) {
+		if ip == "" || seen[ip] {
+			return
+		}
+		seen[ip] = true
+		candidates = append(candidates, ip)
+	}
+
+	for _, line := range strings.Split(leases, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 4 || net.ParseIP(fields[2]) == nil {
 			continue
@@ -1046,7 +1134,58 @@ func easyMeshManagementNodesByALID(chassisMACs map[string]bool) map[string]easyM
 		if !strings.EqualFold(fields[3], "RoobuckAC") && !chassisMACs[strings.ToLower(fields[1])] {
 			continue
 		}
-		ip := fields[2]
+		add(fields[2])
+	}
+
+	for mac, ip := range easyMeshNeighbourAddresses(neighbours) {
+		if chassisMACs[mac] {
+			add(ip)
+		}
+	}
+	return candidates
+}
+
+// easyMeshNeighbourAddresses maps each MAC in an `ip neigh show` dump to the
+// address the kernel last saw it at.
+//
+// An entry with no lladdr (FAILED, INCOMPLETE) carries no MAC to match on and is
+// skipped. STALE is kept: it means the entry has not been re-verified lately,
+// not that it is wrong, and a Mesh Agent nobody has spoken to for a minute sits
+// in exactly that state.
+func easyMeshNeighbourAddresses(raw string) map[string]string {
+	addresses := make(map[string]string)
+	for _, line := range strings.Split(raw, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		address := net.ParseIP(fields[0])
+		if address == nil || address.To4() == nil {
+			continue
+		}
+		for i := 1; i < len(fields)-1; i++ {
+			if fields[i] != "lladdr" {
+				continue
+			}
+			mac := strings.ToLower(fields[i+1])
+			if _, err := net.ParseMAC(mac); err == nil {
+				if _, already := addresses[mac]; !already {
+					addresses[mac] = fields[0]
+				}
+			}
+			break
+		}
+	}
+	return addresses
+}
+
+func easyMeshManagementNodesByALID(chassisMACs map[string]bool) map[string]easyMeshManagementNode {
+	nodes := make(map[string]easyMeshManagementNode)
+	leases, err := os.ReadFile("/tmp/dhcp.leases")
+	if err != nil {
+		leases = nil
+	}
+	for _, ip := range easyMeshManagementCandidates(string(leases), easyMeshNeighbourTable(), chassisMACs) {
 		meshALID, nodeID, err := easyMeshManagementIdentityAt(ip)
 		if err != nil {
 			continue
@@ -1357,20 +1496,38 @@ func waitForEasyMeshRemoteReachable(ip string, timeout time.Duration) error {
 	return lastErr
 }
 
-// easyMeshLANPortsShellVar emits the shell that captures br-lan's CURRENT
-// physical port list into $LANP. The port count is hardware-specific (this
-// chassis carries lan1..lan5, not the four an earlier revision assumed), and a
-// hardcoded range silently drops every port beyond it from the rebuilt bridge:
-// whatever is plugged into the extra port goes dark until Leave restores the
-// snapshot. Deriving the list keeps the migration faithful to the real device.
-// Already-tagged entries (lanN.100 from a re-run) collapse back to their base
-// port so the migration stays idempotent instead of yielding an empty list.
-const easyMeshLANPortsShellVar = `LANP=""; for p in $(uci -q get network.@device[0].ports); do case "$p" in lan*.*) LANP="$LANP ${p%%.*}";; lan*) LANP="$LANP $p";; esac; done; LANP=$(echo $LANP | tr ' ' '\n' | sort -u | tr '\n' ' '); test -n "$LANP"; `
+// antennaManagementPortNames returns the LAN ports an Antenna may be plugged
+// into, and therefore the only ports that get a tagged leg on the management
+// VLAN.
+//
+// The set is the size of the Antenna address pool, because the two have to
+// agree: a port outside it can never be given a management address, so naming
+// it in the bridge only widens where that plane can be reached from. On this
+// hardware that is lan5, which the product uses for ordinary customer equipment
+// -- and the management plane answers ubus on the anonymous session, so a leg
+// there is a socket a customer plugs their own hardware into.
+func antennaManagementPortNames() []string {
+	names := make([]string, 0, len(APManagementIPs()))
+	for index := 1; index <= len(APManagementIPs()); index++ {
+		names = append(names, "lan"+strconv.Itoa(index))
+	}
+	return names
+}
+
+// easyMeshLANPortsShellVar emits the shell that captures the LAN ports this
+// chassis will carry Antenna management on: br-lan's current ports, narrowed to
+// the ones an Antenna may occupy. Reading them from br-lan rather than assuming
+// keeps a chassis with fewer ports from being given legs it has no sockets for.
+func easyMeshLANPortsShellVar() string {
+	return `LANP=""; for p in $(uci -q get network.@device[0].ports); do case "$p" in lan*.*) p="${p%%.*}";; lan*) ;; *) continue;; esac; case "$p" in ` +
+		strings.Join(antennaManagementPortNames(), "|") +
+		`) case " $LANP " in *" $p "*) ;; *) LANP="$LANP $p";; esac;; esac; done; test -n "$LANP"; `
+}
 
 func easyMeshPrepareACManagementCommand() string {
 	var b strings.Builder
 	b.WriteString("set -e; test \"$(uci -q get network.@device[0].name)\" = br-lan; mkdir -p /etc/roobuck/mesh-backup; ")
-	b.WriteString(easyMeshLANPortsShellVar)
+	b.WriteString(easyMeshLANPortsShellVar())
 	b.WriteString("for p in $LANP; do uci -q delete network.mesh_mgmt_$p 2>/dev/null || true; uci set network.mesh_mgmt_$p=device; uci set network.mesh_mgmt_$p.type=8021q; uci set network.mesh_mgmt_$p.ifname=$p; uci set network.mesh_mgmt_$p.vid=200; uci set network.mesh_mgmt_$p.name=$p.200; done; ")
 	b.WriteString("uci -q delete network.mesh_mgmt_bridge 2>/dev/null || true; uci set network.mesh_mgmt_bridge=device; uci set network.mesh_mgmt_bridge.name=" + AntennaManagementBridge + "; uci set network.mesh_mgmt_bridge.type=bridge; ")
 	b.WriteString("for p in $LANP; do uci add_list network.mesh_mgmt_bridge.ports=$p.200; done; ")
@@ -1382,6 +1539,32 @@ func easyMeshManagementBridgeMigrationCommand() string {
 	return "set -e; uci set network.mesh_mgmt_bridge.name=" + AntennaManagementBridge +
 		"; uci set network.antenna_mgmt.device=" + AntennaManagementBridge +
 		"; uci commit network; ubus call network reload"
+}
+
+// easyMeshRebuildManagementBridgeCommand makes netifd build the management
+// plane it already holds the configuration for.
+//
+// A plain `ubus call network reload` is not enough, because the problem is that
+// netifd already believes the work is done. Measured on a chassis whose br-mgmt
+// had gone: the configuration was complete, the kernel had no such device, and
+// netifd still reported the interface "up": true on "device": "br-mgmt" -- so a
+// reload found nothing to do and changed nothing. Bouncing the interface is what
+// makes it drop that belief and create the device again.
+//
+// Only this interface is touched. Reloading the whole network would rebuild
+// br-lan as well, which drops this chassis's radios and, on an Agent, the
+// Backhaul underneath it.
+// easyMeshNarrowManagementVLANCommand takes the management VLAN off any LAN port
+// that can never hold an Antenna, on a chassis that was built before the set was
+// narrowed. It reports "narrowed" only when it changed something.
+func easyMeshNarrowManagementVLANCommand() string {
+	return `changed=0; for section in $(uci show network | grep -o "network.mesh_mgmt_lan[0-9]*=device"); do section=${section%%=*}; p=${section##*mesh_mgmt_}; case "$p" in ` +
+		strings.Join(antennaManagementPortNames(), "|") +
+		`) continue;; esac; uci -q delete network.mesh_mgmt_$p; uci -q del_list network.mesh_mgmt_bridge.ports=$p.200; changed=1; done; [ "$changed" = 1 ] || exit 0; uci commit network; echo narrowed`
+}
+
+func easyMeshRebuildManagementBridgeCommand() string {
+	return "ifdown " + AntennaManagementInterface + "; sleep 2; ifup " + AntennaManagementInterface + "; true"
 }
 
 func easyMeshManagementRuntimeReady() bool {
@@ -1402,6 +1585,8 @@ func ensureEasyMeshManagementBridge() error {
 	if _, err := easyMeshExecLocal(easyMeshManagementBridgeMigrationCommand()); err != nil {
 		return fmt.Errorf("restore compatible Antenna management bridge: %v", err)
 	}
+	// This reload rebuilds br-lan the same way the first one does.
+	settleClientBridgeAfterReload()
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		if easyMeshManagementRuntimeReady() {
@@ -1415,7 +1600,12 @@ func ensureEasyMeshManagementBridge() error {
 func easyMeshPrepareAntennaManagementCommand() string {
 	return "set -e; test \"$(uci -q get network.@device[0].name)\" = br-lan; test -d /sys/class/net/eth1; " +
 		"uci -q delete network.mesh_mgmt_eth1 2>/dev/null || true; uci set network.mesh_mgmt_eth1=device; uci set network.mesh_mgmt_eth1.type=8021q; uci set network.mesh_mgmt_eth1.ifname=eth1; uci set network.mesh_mgmt_eth1.vid=200; uci set network.mesh_mgmt_eth1.name=eth1.200; " +
-		"uci -q delete network.antenna_mgmt 2>/dev/null || true; uci set network.antenna_mgmt=interface; uci set network.antenna_mgmt.device=eth1.200; uci set network.antenna_mgmt.proto=dhcp; uci set network.antenna_mgmt.vendorid=RoobuckAP; uci commit network; ubus call network reload"
+		"uci -q delete network.antenna_mgmt 2>/dev/null || true; uci set network.antenna_mgmt=interface; uci set network.antenna_mgmt.device=eth1.200; uci set network.antenna_mgmt.proto=dhcp; uci set network.antenna_mgmt.vendorid=RoobuckAP; " +
+		// Identify the management lease by the radio's factory MAC, not by eth1,
+		// whose address this hardware regenerates on every boot. See
+		// antennaClientPlaneState for why.
+		"m=$(cat /sys/class/net/ra0/address 2>/dev/null); if [ -n \"$m\" ]; then uci set network.antenna_mgmt.clientid=\"01:$m\"; fi; " +
+		"uci commit network; ubus call network reload"
 }
 
 func waitForEasyMeshManagementLeases(modules []ManagedModule, timeout time.Duration) (map[string]string, error) {
@@ -2784,8 +2974,36 @@ func waitForEasyMeshRemoteStart(ip string, timeout time.Duration) error {
 	return fmt.Errorf("MediaTek EasyMesh engine did not become ready: %v", lastErr)
 }
 
+// easyMeshOnboardingWindowInterrupted reports whether a pairing window was open
+// when this process last stopped.
+//
+// A window lives in a goroutine, so nothing survives a restart of the service or
+// a reboot of the chassis: the registrar is disarmed and the joining device is
+// left pressing against a door that is no longer being held. Nothing said so.
+// Measured: the Root restarted seconds after opening a window, and the Agent
+// reported only that its Backhaul had not stayed up -- true, but it named the
+// wrong cause and cost an hour chasing the radio instead of the Root.
+//
+// openedAt is the stored OnboardingAt; zero means no window was open.
+func easyMeshOnboardingWindowInterrupted(openedAt int64, now time.Time) bool {
+	if openedAt <= 0 {
+		return false
+	}
+	elapsed := now.Sub(time.Unix(openedAt, 0))
+	return elapsed >= 0 && elapsed < easyMeshOnboardingWindow
+}
+
 func resumeEasyMeshAtStartup() {
 	cfg := loadEasyMeshConfig()
+	// Say so when a restart took a pairing window down with it, and clear the
+	// record so the next start does not report it again.
+	if easyMeshOnboardingWindowInterrupted(cfg.OnboardingAt, time.Now()) {
+		fmt.Printf("EasyMesh startup: a wireless onboarding window was open when this device last stopped; it did not survive the restart. Open it again before retrying the join.\n")
+		cfg.OnboardingAt = 0
+		if err := saveEasyMeshConfig(cfg); err != nil {
+			fmt.Printf("EasyMesh startup: could not clear the interrupted onboarding window: %v\n", err)
+		}
+	}
 	// A merged Enable-Mesh flow scheduled activation across the Prepare reboot;
 	// finish it now so the user reconnects only once.
 	if cfg.ActivationPending && !cfg.Enabled && cfg.NetworkPrepared {
@@ -3173,10 +3391,23 @@ func acceptDownstreamMeshNode() error {
 		return err
 	}
 
-	band, _, bandErr := easyMeshActiveBackhaulBandAssociated(cfg.BackhaulBand)
-	if bandErr != nil {
+	// The Agent must be on the air with the Mesh before it can hand the Mesh on,
+	// so which band its own uplink uses is checked -- and then deliberately
+	// discarded. The window goes on the band the MESH selected, not the one this
+	// uplink happens to be riding.
+	//
+	// mapd moves an uplink to whichever band it prefers, and it had moved this one
+	// to 2.4GHz. Opening the window there put it on a Radio nobody was listening
+	// to: a joining Agent arms the band ITS OWN configuration selects, which was
+	// 5GHz. Measured on the live three-node Mesh -- the joining Agent never even
+	// attempted a connection (not one "will connect" line in a dmesg buffer that
+	// covered its entire uptime) and the window closed five minutes later
+	// reporting that nobody had come. Every node in one Mesh shares the selected
+	// band, so that is the only band both sides can agree on without asking.
+	if _, _, bandErr := easyMeshActiveBackhaulBandAssociated(cfg.BackhaulBand); bandErr != nil {
 		return fmt.Errorf("this Agent's own Backhaul is not up: %v", bandErr)
 	}
+	band := cfg.BackhaulBand
 
 	setEasyMeshJobStage("Opening wireless onboarding on this Agent's Radio")
 	baselineDevices := make(map[string]bool)
@@ -3188,6 +3419,17 @@ func acceptDownstreamMeshNode() error {
 		return err
 	}
 	return maintainDownstreamOnboardingWindow(band, baselineStations, baselineDevices, easyMeshOnboardingWindow)
+}
+
+// easyMeshTopologyHasNewDevice reports whether the 1905 topology now lists a
+// device that was absent when the baseline was taken.
+func easyMeshTopologyHasNewDevice(devices map[string]bool, baseline map[string]bool) bool {
+	for id := range devices {
+		if !baseline[id] {
+			return true
+		}
+	}
+	return false
 }
 
 // maintainDownstreamOnboardingWindow keeps an Agent's PBC window alive and
@@ -3218,19 +3460,32 @@ func maintainDownstreamOnboardingWindow(band string, baselineStations int, basel
 		}
 		time.Sleep(delay)
 
+		// Either signal is enough on its own, and each sees something the other
+		// cannot.
+		//
+		// A device in the 1905 topology that was not there when the window opened is
+		// the Mesh's own answer, and it is checked first because it survives what
+		// happens next: the joining chassis takes the credential and the Mesh engine
+		// immediately re-picks its parent, usually the Root, which scores a hop
+		// closer. Measured on the live Mesh -- a chassis paired through this window
+		// in 62 seconds, moved to the Root, and the window still ran its full five
+		// minutes and reported that nobody had come.
+		//
+		// This used to be checked only after the station count had risen, which is
+		// exactly the case that does not survive the move.
+		if topology, err := easyMeshLocalTopologySnapshot(); err == nil {
+			if easyMeshTopologyHasNewDevice(easyMeshTopologyDeviceIDs(topology), baselineDevices) {
+				setEasyMeshJobStage("Further Mesh Agent joined through this Agent")
+				return nil
+			}
+		}
+
+		// A station still sitting on this Agent's own Backhaul means a pairing is in
+		// progress but 1905 has not caught up. Leave the window alone -- re-arming
+		// now would tear that pairing down.
 		stations := easyMeshBackhaulBSSStations(band)
 		if stations >= 0 && baselineStations >= 0 && stations > baselineStations {
 			setEasyMeshJobStage("A device associated to this Agent's Backhaul; confirming it joined the Mesh")
-			if topology, err := easyMeshLocalTopologySnapshot(); err == nil {
-				for id := range easyMeshTopologyDeviceIDs(topology) {
-					if !baselineDevices[id] {
-						setEasyMeshJobStage("Further Mesh Agent joined through this Agent")
-						return nil
-					}
-				}
-			}
-			// Associated but not yet a 1905 device. Leave the window alone --
-			// re-arming here would tear the pairing down.
 			continue
 		}
 
@@ -3592,16 +3847,41 @@ func waitForEasyMeshBackhaulOnAnyBand(preferred string, timeout time.Duration) (
 	return "", lastStatus, fmt.Errorf("wireless backhaul did not connect within %s; the Agent kept its original management address and DHCP server", timeout.Round(time.Second))
 }
 
-func waitForEasyMeshBackhaulStable(band string, stableFor time.Duration, timeout time.Duration) error {
+// waitForEasyMeshBackhaulStable waits for the wireless Backhaul to stay up for
+// stableFor without a break.
+//
+// preferred is the band the operator selected. It is a preference used to break
+// ties in reporting, never a requirement, and which band carries the link is
+// re-read on every sample rather than pinned when the wait begins. mapd's
+// AutoBHSwitching moves the Backhaul whenever it prefers the other band -- the
+// moment a credential lands, and again minutes later on a live pair that had
+// onboarded on 5 GHz -- so a wait that watched only the band it started on ends
+// up staring at a station that legitimately went quiet, and fails an Agent whose
+// Backhaul was up the whole time. Every caller pins a band before a wait that
+// runs for up to two minutes, which is ample time for that move to happen, so
+// following the link belongs here rather than in any one of them.
+//
+// The failure reports what was actually observed. The old message named only the
+// selected band, and sent a real investigation chasing a band that had nothing to
+// do with it: the Backhaul had gone down because the Root rebooted underneath it.
+func waitForEasyMeshBackhaulStable(preferred string, stableFor time.Duration, timeout time.Duration) error {
 	if stableFor <= 0 {
 		stableFor = time.Second
 	}
 	deadline := time.Now().Add(timeout)
 	var stableSince time.Time
+	lastBand := ""
+	lastStatus := ""
 	for time.Now().Before(deadline) {
 		raw := easyMeshRuntimeCommand("bh_conn_status")
-		associated, assocErr := easyMeshLocalWirelessBackhaulAssociated(band)
-		if assocErr == nil && easyMeshBackhaulConnected(raw) && associated {
+		if trimmed := strings.TrimSpace(raw); trimmed != "" {
+			lastStatus = trimmed
+		}
+		band, _, bandErr := easyMeshActiveBackhaulBandAssociated(preferred)
+		if bandErr == nil && band != "" {
+			lastBand = band
+		}
+		if bandErr == nil && band != "" && easyMeshBackhaulConnected(raw) {
 			if stableSince.IsZero() {
 				stableSince = time.Now()
 			}
@@ -3613,7 +3893,15 @@ func waitForEasyMeshBackhaulStable(band string, stableFor time.Duration, timeout
 		}
 		time.Sleep(time.Second)
 	}
-	return fmt.Errorf("the selected %s Backhaul did not remain stable for %s", strings.ToUpper(band), stableFor.Round(time.Second))
+	seen := "no Backhaul station stayed associated on either band"
+	if lastBand != "" {
+		seen = "the Backhaul was last seen on " + easyMeshBandLabel(lastBand)
+	}
+	if lastStatus == "" {
+		lastStatus = "nothing"
+	}
+	return fmt.Errorf("the wireless Backhaul did not stay up for %s: %s, and the Mesh engine reported %q",
+		stableFor.Round(time.Second), seen, lastStatus)
 }
 
 // easyMeshRadioReadyInterfaces returns the interfaces whose presence confirms a
@@ -4000,6 +4288,60 @@ exit 1`, delaySeconds, easyMeshHandoffReady, easyMeshHandoffFailed, ACManagement
 	return "rm -f " + easyMeshHandoffReady + " " + easyMeshHandoffFailed + " " + easyMeshHandoffPID +
 		"; /sbin/start-stop-daemon -S -b -m -p " + easyMeshHandoffPID + " -x /bin/sh -- -c " +
 		shellSingleQuote(worker+" >/tmp/lrap-mesh-agent-handoff.log 2>&1") + "; echo scheduled"
+}
+
+// How often an Agent re-asks the Root for the address it already holds.
+//
+// The Root hands out twelve-hour leases; an hour leaves eleven to notice a
+// failure and try again, and costs one DHCP exchange per hour per Agent.
+var easyMeshAgentLeaseRefresh = time.Hour
+
+// easyMeshAgentLeaseRefreshCommand re-asks the Root for this Agent's address.
+//
+// The handoff acquires the address with a one-shot udhcpc against the live
+// bridge rather than by reloading netifd, because a reload rebuilds br-lan and
+// takes down the very Backhaul the DHCP exchange travels over. That is the right
+// trade, but it leaves nobody renewing: -q exits as soon as a lease is in hand,
+// and netifd is still running the pre-handoff static definition, so no DHCP
+// client survives the handoff.
+//
+// Twelve hours later the Root drops the lease and the Agent disappears from
+// management -- while remaining perfectly reachable, which is what made it so
+// hard to see. Measured on the live Mesh: an Agent still associated, still
+// answering /healthz and still in the 1905 topology, with no lease and no entry
+// on the Root's page.
+//
+// Re-running the same one-shot exchange refreshes the Root's record without
+// touching the bridge. Same flags as the handoff, plus -n so a Root that cannot
+// answer leaves no client behind.
+func easyMeshAgentLeaseRefreshCommand() string {
+	return "udhcpc -i " + clientBridgeName + " -q -n -t 4 -T 3 -H RoobuckAC -V RoobuckAC >/dev/null 2>&1; true"
+}
+
+// startAgentLeaseRefresh keeps a handed-off Agent's Root-issued lease alive.
+//
+// It runs only while this chassis is an Agent that has completed the handoff:
+// before that it still owns its own address, and a Controller issues leases
+// rather than holding one.
+func startAgentLeaseRefresh() {
+	go func() {
+		for {
+			time.Sleep(easyMeshAgentLeaseRefresh)
+			cfg := loadEasyMeshConfig()
+			if !easyMeshAgentShouldRefreshLease(cfg) {
+				continue
+			}
+			if _, err := easyMeshExecLocal(easyMeshAgentLeaseRefreshCommand()); err != nil {
+				fmt.Printf("EasyMesh: could not refresh this Agent's Root-issued lease: %v\n", err)
+			}
+		}
+	}()
+}
+
+// easyMeshAgentShouldRefreshLease reports whether this chassis holds an address
+// issued by the Root that it is responsible for keeping alive.
+func easyMeshAgentShouldRefreshLease(cfg EasyMeshConfig) bool {
+	return cfg.Enabled && cfg.Role == "agent" && cfg.AgentHandoff
 }
 
 func waitForEasyMeshAgentClientHandoff(timeout time.Duration) (string, error) {

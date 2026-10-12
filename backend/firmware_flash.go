@@ -498,36 +498,26 @@ func firmwareRunBundleUpgradeJob(jobID string, bundle firmwareUnpackedBundle, do
 
 	firmwareUpdateJob(jobID, "running", "All antennas passed precheck. Dispatching antenna firmware upgrade commands.", true, false)
 
-	dispatchOK := true
+	targets := make([]string, 0, len(states))
 	for _, st := range states {
-		result := FirmwareFlashResult{
-			IP:     st.IP,
-			Role:   "sub",
-			Stage:  "dispatch",
-			Status: "failed",
-			OK:     false,
-		}
-
-		if err := firmwareCommandAPWgetAndFlash(st.IP, downloadURL, keepSettings); err != nil {
-			result.Error = err.Error()
-			dispatchOK = false
-		} else {
-			result.OK = true
-			result.Status = "ok"
-		}
-
-		firmwareAppendJobResult(jobID, result)
-		time.Sleep(800 * time.Millisecond)
+		targets = append(targets, st.IP)
 	}
-
-	if !dispatchOK {
-		firmwareUpdateJob(jobID, "failed", "Antenna firmware dispatch failed for at least one antenna. AC firmware was not flashed.", false, true)
+	launched, dispatchOK := firmwareDispatchAPUpgrades(targets, downloadURL, keepSettings, "sub", func(r FirmwareFlashResult) {
+		firmwareAppendJobResult(jobID, r)
+	})
+	if len(launched) == 0 {
+		firmwareUpdateJob(jobID, "failed", "Antenna firmware could not be dispatched to every antenna, so none was told to upgrade. Antenna and AC firmware were not flashed.", false, true)
 		return
+	}
+	if !dispatchOK {
+		// The launched Antennas are already flashing and cannot be recalled. Follow
+		// them through so their leases and versions are handled, then stop before AC.
+		states = firmwareStatesForIPs(states, launched)
 	}
 
 	// Important timing fix:
-	// Do not clear the AP DHCP leases immediately after dispatch. The AP worker sleeps
-	// before wget/sysupgrade so /ubus can return cleanly. If dnsmasq is restarted while
+	// Do not clear the AP DHCP leases immediately after dispatch. The AP worker waits
+	// a few seconds after go before wget/sysupgrade. If dnsmasq is restarted while
 	// the old AP OS is still alive, the old MAC can immediately reclaim .2-.5 before
 	// the real sysupgrade reboot. Wait until the antennas have entered the reboot/upgrade
 	// window, then clear the AP IP/MAC leases.
@@ -577,6 +567,11 @@ func firmwareRunBundleUpgradeJob(jobID string, bundle firmwareUnpackedBundle, do
 			firmwareUpdateJob(jobID, "failed", "At least one antenna did not come back with the expected LRAP version. AC firmware was not flashed.", false, true)
 			return
 		}
+	}
+
+	if !dispatchOK {
+		firmwareUpdateJob(jobID, "failed", fmt.Sprintf("Only %d of %d antennas could be told to upgrade. AC firmware was not flashed.", len(launched), len(targets)), false, true)
+		return
 	}
 
 	firmwareUpdateJob(jobID, "running", "All antennas are verified. Starting AC firmware upgrade now.", true, false)
@@ -1527,27 +1522,9 @@ func firmwareHandleLegacyAPUpgrade(r *http.Request, uploadedPath string, filenam
 	downloadURL := firmwareBuildDownloadURL(r, downloadID)
 	results := make([]FirmwareFlashResult, 0, len(targetIPs))
 
-	allDispatchOK := true
-	for _, ip := range targetIPs {
-		result := FirmwareFlashResult{
-			IP:     ip,
-			Role:   "ap",
-			Stage:  "dispatch",
-			Status: "failed",
-			OK:     false,
-		}
-
-		if err := firmwareCommandAPWgetAndFlash(ip, downloadURL, keepSettings); err != nil {
-			result.Error = err.Error()
-			allDispatchOK = false
-		} else {
-			result.OK = true
-			result.Status = "ok"
-		}
-
-		results = append(results, result)
-		time.Sleep(800 * time.Millisecond)
-	}
+	_, allDispatchOK := firmwareDispatchAPUpgrades(targetIPs, downloadURL, keepSettings, "ap", func(r FirmwareFlashResult) {
+		results = append(results, r)
+	})
 
 	if allDispatchOK {
 		cleanupIPs := firmwareMergeIPs(APManagementIPs(), targetIPs)
@@ -1640,102 +1617,6 @@ func firmwareStartLocalSysupgrade(path string, keepSettings bool) {
 }
 
 // ---------- AP wget + sysupgrade through ubus ----------
-
-func firmwareCommandAPWgetAndFlash(ip string, downloadURL string, keepSettings bool) error {
-	ip = strings.TrimSpace(ip)
-	if ip == "" {
-		return fmt.Errorf("empty antenna IP")
-	}
-
-	if downloadURL == "" {
-		return fmt.Errorf("empty download URL")
-	}
-
-	apFirmwarePath := "/tmp/lrap-ap-firmware.bin"
-	apLogPath := "/tmp/lrap-firmware-upgrade.log"
-	apWorkerPath := "/tmp/lrap-firmware-worker.sh"
-
-	keepValue := "1"
-	if !keepSettings {
-		keepValue = "0"
-	}
-
-	// Root fix for intermittent empty ubus response bodies:
-	//
-	// The previous implementation sent one long "sh -c" command containing the
-	// delayed wget + sysupgrade worker. Some AP/rpcd/uhttpd builds intermittently
-	// returned an empty HTTP body even though the command was actually scheduled.
-	// The symptom was:
-	//   remote antenna exec failed before upgrade worker was scheduled: ubus bad result body=
-	//
-	// This version separates the complex upgrade logic from the dispatch command:
-	//   1) Write the real worker script onto the AP first. This does not reboot or
-	//      kill services, so ubus has time to return normal JSON.
-	//   2) Dispatch only a tiny command shaped like the manual test that was proven
-	//      stable on the device:
-	//        ( sleep 45; sh /tmp/lrap-firmware-worker.sh ) </dev/null >/dev/null 2>&1 & echo LRAP_DISPATCH_OK
-	//
-	// Bad/empty ubus body is still treated as a real dispatch failure. The fix is
-	// that the command which must return through ubus is now minimal.
-	workerScript := firmwareBuildAPUpgradeWorkerScript(apFirmwarePath, apLogPath, downloadURL, keepValue)
-	if err := firmwareWriteRemoteText(ip, AnonSID, apWorkerPath, workerScript, 0700); err != nil {
-		return fmt.Errorf("remote antenna worker script write failed: %v", err)
-	}
-
-	cmd := fmt.Sprintf(`rm -f %[1]s; ( sleep 45; sh %[2]s ) </dev/null >/dev/null 2>&1 & echo LRAP_DISPATCH_OK`,
-		shellQuote(apLogPath),
-		shellQuote(apWorkerPath),
-	)
-
-	res, err := firmwareUbusCallAtWithTimeout(ip, AnonSID, "file", "exec", map[string]any{
-		"command": "sh",
-		"params":  []string{"-c", cmd},
-	}, 12*time.Second)
-	if err != nil {
-		return fmt.Errorf("remote antenna exec failed before upgrade worker was scheduled: %v", err)
-	}
-
-	// Require the same positive marker used in the manual wget --post-file test.
-	// If a device returns a JSON result but omits stdout, we allow it because some
-	// rpcd builds do not include stdout for file.exec. An actual empty/bad HTTP body
-	// is still an error above and is not hidden.
-	if stdout, ok := res["stdout"].(string); ok && strings.TrimSpace(stdout) != "" && !strings.Contains(stdout, "LRAP_DISPATCH_OK") {
-		return fmt.Errorf("remote antenna exec returned unexpected stdout: %s", strings.TrimSpace(stdout))
-	}
-
-	return nil
-}
-
-func firmwareBuildAPUpgradeWorkerScript(apFirmwarePath string, apLogPath string, downloadURL string, keepValue string) string {
-	return fmt.Sprintf(`#!/bin/sh
-AP_FIRMWARE=%s
-AP_LOG=%s
-DOWNLOAD_URL=%s
-KEEP_SETTINGS=%s
-{
-  echo "LRAP worker start $(date)"
-  rm -f "$AP_FIRMWARE"
-  wget -O "$AP_FIRMWARE" "$DOWNLOAD_URL"
-  rc=$?
-  echo "wget rc=$rc"
-  [ "$rc" -eq 0 ] || exit "$rc"
-  [ -s "$AP_FIRMWARE" ] || exit 1
-  sync
-  sleep 2
-  echo "sysupgrade start $(date)"
-  if [ "$KEEP_SETTINGS" = "0" ]; then
-    /sbin/sysupgrade -n "$AP_FIRMWARE"
-  else
-    /sbin/sysupgrade "$AP_FIRMWARE"
-  fi
-} >> "$AP_LOG" 2>&1
-`,
-		shellQuote(apFirmwarePath),
-		shellQuote(apLogPath),
-		shellQuote(downloadURL),
-		shellQuote(keepValue),
-	)
-}
 
 func firmwareWriteRemoteText(ip string, sid string, path string, data string, perm os.FileMode) error {
 	ip = strings.TrimSpace(ip)

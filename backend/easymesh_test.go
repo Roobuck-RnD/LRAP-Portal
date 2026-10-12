@@ -1523,3 +1523,447 @@ func TestTheManagementLeaseFilterDoesNotRelyOnTheHostname(t *testing.T) {
 		t.Fatal("a probed lease is no longer asked to identify itself")
 	}
 }
+
+// AutoBHSwitching moves the Backhaul between bands whenever mapd prefers the
+// other one, including in the middle of a wait that runs for up to two minutes.
+// Following the link is what makes the wait correct; watching only the band it
+// started on fails an Agent whose Backhaul never went down.
+func TestTheBackhaulWaitFollowsTheBandMapdMovesItTo(t *testing.T) {
+	original := easyMeshExecLocal
+	t.Cleanup(func() { easyMeshExecLocal = original })
+
+	// The link starts on 5GHz and mapd moves it to 2.4GHz after the third sample.
+	samples := 0
+	movedTo24 := false
+	easyMeshExecLocal = func(command string) (string, error) {
+		switch {
+		case strings.Contains(command, "bh_conn_status"):
+			samples++
+			if samples > 3 {
+				movedTo24 = true
+			}
+			return "backhaul connection status 1", nil
+		case strings.Contains(command, "iwconfig apclix0"): // 5GHz
+			if movedTo24 {
+				return `apclix0    Access Point: Not-Associated`, nil
+			}
+			return `apclix0    Access Point: F2:A8:82:FB:00:A4`, nil
+		case strings.Contains(command, "iwconfig apcli0"): // 2.4GHz
+			if movedTo24 {
+				return `apcli0    Access Point: F0:A8:82:FB:00:A4`, nil
+			}
+			return `apcli0    Access Point: Not-Associated`, nil
+		}
+		return "", nil
+	}
+
+	if err := waitForEasyMeshBackhaulStable("5g", 5*time.Second, 30*time.Second); err != nil {
+		t.Fatalf("a Backhaul that mapd moved to the other band was reported unstable: %v", err)
+	}
+	if !movedTo24 {
+		t.Fatal("the test never exercised the band move")
+	}
+}
+
+// When the Backhaul really is down, the failure has to say what was seen. The
+// old message named only the selected band and sent a real investigation after
+// a band that had nothing to do with the cause.
+func TestTheBackhaulFailureSaysWhatItActuallySaw(t *testing.T) {
+	original := easyMeshExecLocal
+	t.Cleanup(func() { easyMeshExecLocal = original })
+
+	// Associated on 2.4GHz, but the engine never reports the Backhaul connected.
+	easyMeshExecLocal = func(command string) (string, error) {
+		switch {
+		case strings.Contains(command, "bh_conn_status"):
+			return "backhaul connection status 0", nil
+		case strings.Contains(command, "iwconfig apcli0"):
+			return `apcli0    Access Point: F0:A8:82:FB:00:A4`, nil
+		}
+		return `apclix0    Access Point: Not-Associated`, nil
+	}
+
+	err := waitForEasyMeshBackhaulStable("5g", 2*time.Second, 3*time.Second)
+	if err == nil {
+		t.Fatal("a Backhaul the engine never reported connected was accepted as stable")
+	}
+	message := err.Error()
+	if strings.Contains(message, "selected") {
+		t.Fatalf("the failure still blames the selected band: %v", err)
+	}
+	if !strings.Contains(message, "2.4GHz") {
+		t.Fatalf("the failure does not name the band the link was last seen on: %v", err)
+	}
+	if !strings.Contains(message, "backhaul connection status 0") {
+		t.Fatalf("the failure does not quote what the Mesh engine reported: %v", err)
+	}
+}
+
+// A pairing window lives in a goroutine, so a restart of the service or a reboot
+// of the chassis disarms the registrar and leaves the joining device pressing
+// against a door nobody is holding. Nothing used to say so: measured on the live
+// Mesh, the Root restarted seconds after opening a window and the Agent reported
+// only that its Backhaul had not stayed up, which named the wrong cause.
+func TestARestartIsReportedAsKillingAnOpenOnboardingWindow(t *testing.T) {
+	now := time.Now()
+
+	if !easyMeshOnboardingWindowInterrupted(now.Add(-30*time.Second).Unix(), now) {
+		t.Fatal("a window opened 30s before the restart was not reported as interrupted")
+	}
+	// A window that had already expired on its own is not news.
+	if easyMeshOnboardingWindowInterrupted(now.Add(-2*easyMeshOnboardingWindow).Unix(), now) {
+		t.Fatal("an expired window was reported as interrupted by the restart")
+	}
+	if easyMeshOnboardingWindowInterrupted(0, now) {
+		t.Fatal("a device that never opened a window reported an interrupted one")
+	}
+	// A clock that moved backwards must not manufacture a report.
+	if easyMeshOnboardingWindowInterrupted(now.Add(time.Hour).Unix(), now) {
+		t.Fatal("a window stamped in the future was reported as interrupted")
+	}
+}
+
+// A chain gives every Agent a downstream 1905 device whose upstream is itself:
+// the next Agent. That is not this Agent's own main module, and adopting it
+// hands this Agent its neighbour's management address.
+//
+// Measured the first time a real two-hop chain existed: the Root drew both
+// Agents at the second Agent's address, so the middle of the chain was
+// unreachable from the page that claimed to reach it.
+func TestAnAgentDoesNotInheritTheNextHopsManagementAddress(t *testing.T) {
+	// Root -> Agent1 (2.4GHz) -> Agent2 (5GHz), as measured on the live Mesh.
+	const chain = `{"topology information":[
+{"AL MAC":"f2:a8:82:fb:00:a4","Device role":"01","Distance from controller":"0","BH Info":[]},
+{"AL MAC":"de:84:03:11:57:80","Device role":"02","Distance from controller":"1","Upstream 1905 device":"f2:a8:82:fb:00:a4",
+ "BH Info":[{"neighbor almac addr":"f2:a8:82:fb:00:a4","Backhaul Medium Type":"2.4G","RSSI":"-46"}]},
+{"AL MAC":"f2:a8:82:fb:01:1c","Device role":"02","Distance from controller":"2","Upstream 1905 device":"de:84:03:11:57:80",
+ "BH Info":[{"neighbor almac addr":"de:84:03:11:57:80","Backhaul Medium Type":"5G","RSSI":"-62"}]}]}`
+
+	nodes := easyMeshRemoteNodesFromTopologyWithManagement(chain, nil, map[string]easyMeshManagementNode{
+		"de:84:03:11:57:80": {IP: "10.10.18.127"},
+		"f2:a8:82:fb:01:1c": {IP: "10.10.18.100"},
+	})
+	if len(nodes) != 2 {
+		t.Fatalf("remote nodes = %#v, want both Agents of the chain", nodes)
+	}
+	byALID := map[string]EasyMeshRemoteNode{}
+	for _, node := range nodes {
+		byALID[node.ALID] = node
+	}
+	if got := byALID["de:84:03:11:57:80"].ManagementIP; got != "10.10.18.127" {
+		t.Fatalf("the first hop is reported at %q, want its own address 10.10.18.127", got)
+	}
+	if got := byALID["f2:a8:82:fb:01:1c"].ManagementIP; got != "10.10.18.100" {
+		t.Fatalf("the second hop is reported at %q, want its own address 10.10.18.100", got)
+	}
+	if got := byALID["f2:a8:82:fb:01:1c"].Distance; got != "2" {
+		t.Fatalf("the second hop is at distance %q, want 2", got)
+	}
+	if got := byALID["f2:a8:82:fb:01:1c"].UpstreamALID; got != "de:84:03:11:57:80" {
+		t.Fatalf("the second hop's upstream is %q, want the first hop", got)
+	}
+}
+
+// The wired case is what the rule is for: a chassis whose main module hangs off
+// its wireless half over Ethernet is still one device with one address.
+func TestOnlyAWiredNeighbourCountsAsTheSameChassis(t *testing.T) {
+	wired := easyMeshTopologyDevice{ALMAC: "dc:84:03:01:57:80"}
+	wired.BackhaulInfo = append(wired.BackhaulInfo, struct {
+		NeighborAL string `json:"neighbor almac addr"`
+		Medium     string `json:"Backhaul Medium Type"`
+		RSSI       string `json:"RSSI"`
+	}{NeighborAL: "f0:a8:82:fb:00:f0", Medium: "Ethernet"})
+	if !easyMeshDeviceReachesNeighbourOverWire(wired, "f0:a8:82:fb:00:f0") {
+		t.Fatal("a main module cabled to its wireless half was not treated as the same chassis")
+	}
+
+	wireless := easyMeshTopologyDevice{ALMAC: "f2:a8:82:fb:01:1c"}
+	wireless.BackhaulInfo = append(wireless.BackhaulInfo, struct {
+		NeighborAL string `json:"neighbor almac addr"`
+		Medium     string `json:"Backhaul Medium Type"`
+		RSSI       string `json:"RSSI"`
+	}{NeighborAL: "de:84:03:11:57:80", Medium: "5G"})
+	if easyMeshDeviceReachesNeighbourOverWire(wireless, "de:84:03:11:57:80") {
+		t.Fatal("the next hop of a chain was treated as part of the upstream chassis")
+	}
+
+	// Nothing described: say no rather than guess.
+	if easyMeshDeviceReachesNeighbourOverWire(easyMeshTopologyDevice{}, "de:84:03:11:57:80") {
+		t.Fatal("a device describing no link at all was treated as the same chassis")
+	}
+}
+
+// The Agent hosting a pairing window and the Agent joining through it have to
+// pick the same Radio, and the only thing they can both know without asking is
+// the band the Mesh selected. The host must NOT follow its own uplink.
+//
+// Measured on the live three-node Mesh: mapd had moved the hosting Agent's
+// uplink to 2.4GHz, so the window opened there while the joining Agent — which
+// arms the band its own configuration selects — scanned 5GHz. The joining Agent
+// never attempted a connection at all (not one "will connect" line in a dmesg
+// buffer covering its whole uptime) and the window closed five minutes later
+// reporting that nobody came.
+func TestADownstreamWindowOpensOnTheSelectedBandNotTheUplinksBand(t *testing.T) {
+	source, err := os.ReadFile("easymesh.go")
+	if err != nil {
+		t.Fatalf("read easymesh.go: %v", err)
+	}
+	body := string(source)
+	start := strings.Index(body, "func acceptDownstreamMeshNode()")
+	if start < 0 {
+		t.Fatal("acceptDownstreamMeshNode is gone")
+	}
+	accept := body[start:]
+	if end := strings.Index(accept, "\nfunc "); end > 0 {
+		accept = accept[:end]
+	}
+
+	if !strings.Contains(accept, "band := cfg.BackhaulBand") {
+		t.Fatal("the window band no longer comes from the Mesh's selected band")
+	}
+	// The uplink band may be checked, but its value must not be used: binding it
+	// to a name is how it came to drive the window in the first place.
+	if strings.Contains(accept, "band, _, bandErr := easyMeshActiveBackhaulBandAssociated") {
+		t.Fatal("the window band follows this Agent's own uplink again")
+	}
+	// The precondition itself has to stay: an Agent whose Backhaul is down has no
+	// Mesh credential to hand on.
+	if !strings.Contains(accept, "easyMeshActiveBackhaulBandAssociated(cfg.BackhaulBand)") {
+		t.Fatal("an Agent with no Backhaul of its own can now host a window")
+	}
+}
+
+// Both bands must resolve to their own BSS, or the window and the station that
+// answers it end up on different Radios.
+func TestTheWindowAndTheEnrolleeAgreePerBand(t *testing.T) {
+	for _, band := range []string{"2g", "5g"} {
+		bss := easyMeshBackhaulBSSInterface(band)
+		sta := easyMeshBackhaulSTAInterface(band)
+		registrar := easyMeshBackhaulWPSRegistrarCommand(band)
+		enrollee := easyMeshBackhaulWPSEnrolleeCommand(band)
+
+		if !strings.Contains(registrar, bss) {
+			t.Fatalf("the %s registrar does not target %s: %s", band, bss, registrar)
+		}
+		if !strings.Contains(enrollee, sta) {
+			t.Fatalf("the %s enrollee does not target %s: %s", band, sta, enrollee)
+		}
+		other := easyMeshOtherBand(band)
+		if bss == easyMeshBackhaulBSSInterface(other) || sta == easyMeshBackhaulSTAInterface(other) {
+			t.Fatalf("%s and %s share an interface", band, other)
+		}
+	}
+}
+
+// The Backhaul band is not an operator setting. Both sides of a pairing have to
+// agree on one Radio, and arming both is not an option: WPS PBC tolerates one
+// PBC-active AP in range, and measured on the live Mesh, arming both stations
+// produced no connection attempt at all while arming one paired immediately in
+// the same window. Two chassis set differently simply could not pair.
+func TestThePairingBandIsNotSomethingAnOperatorCanChoose(t *testing.T) {
+	if easyMeshPairingBand != "5g" {
+		t.Fatalf("pairing band = %q; the factory images prefer 5GHz and both sides must agree", easyMeshPairingBand)
+	}
+
+	// Whatever a page sends, the saved band is the product's.
+	for _, requested := range []string{"2g", "5g", "", "garbage"} {
+		cfg := EasyMeshConfig{Role: "standalone", BackhaulBand: "2g"}
+		if err := normalizeAndValidateEasyMeshConfig(&cfg, easyMeshRequest{Role: "agent", BackhaulBand: requested}); err != nil {
+			t.Fatalf("a request carrying band %q was refused: %v", requested, err)
+		}
+		if cfg.BackhaulBand != easyMeshPairingBand {
+			t.Fatalf("band %q was saved as %q, want %q", requested, cfg.BackhaulBand, easyMeshPairingBand)
+		}
+	}
+
+	// A role is still validated -- dropping the band must not drop that.
+	cfg := EasyMeshConfig{}
+	if err := normalizeAndValidateEasyMeshConfig(&cfg, easyMeshRequest{Role: "nonsense"}); err == nil {
+		t.Fatal("an invalid role was accepted")
+	}
+}
+
+// A unit configured by an older build carries the other band on disk. It must
+// not be able to keep that unit from pairing with the rest of the Mesh.
+func TestAStoredBandFromAnOlderBuildIsCorrectedOnLoad(t *testing.T) {
+	original := easyMeshStatePath
+	easyMeshStatePath = t.TempDir() + "/easymesh.json"
+	t.Cleanup(func() { easyMeshStatePath = original })
+
+	stored := `{"version":1,"role":"agent","backhaul_band":"2g","enabled":true}`
+	if err := os.WriteFile(easyMeshStatePath, []byte(stored), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg := loadEasyMeshConfig()
+	if cfg.BackhaulBand != easyMeshPairingBand {
+		t.Fatalf("stored band survived the load as %q, want %q", cfg.BackhaulBand, easyMeshPairingBand)
+	}
+	if cfg.Role != "agent" || !cfg.Enabled {
+		t.Fatalf("correcting the band disturbed the rest of the config: %+v", cfg)
+	}
+}
+
+// An Agent must not fall out of management when its lease lapses. The Root hands
+// out twelve-hour leases and the handoff takes its address with a one-shot
+// udhcpc, so twelve hours after joining, an Agent that is still associated,
+// still answering and still in the 1905 topology had no entry on the Root at
+// all — no Antenna list, no link to its page, and a Leave that skipped it
+// without counting it as unreachable.
+func TestAnAgentStaysManageableAfterItsLeaseLapses(t *testing.T) {
+	// The Agent's client bridge is pinned to its 2.4GHz Radio, so that is the MAC
+	// both the lease and the neighbour entry are held under.
+	chassisMACs := map[string]bool{
+		"dc:84:03:01:57:80": true, // the Agent
+		"f0:a8:82:fb:00:a4": true, // the Root itself
+	}
+	// Exactly what the Root looked like: the Agent's lease gone, its neighbour
+	// entry still there and STALE.
+	const leases = "1789125973 f4:3b:d8:7f:cc:40 10.10.18.249 DESKTOP-KC17O22 *\n" +
+		"1789108408 f0:a8:82:fb:01:1c 10.10.18.101 * *\n"
+	const neighbours = "10.10.18.249 dev br-lan lladdr f4:3b:d8:7f:cc:40 REACHABLE\n" +
+		"10.10.18.127 dev br-lan lladdr dc:84:03:01:57:80 used 0/0/0 probes 1 STALE\n"
+
+	got := easyMeshManagementCandidates(leases, neighbours, chassisMACs)
+	found := false
+	for _, ip := range got {
+		if ip == "10.10.18.127" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the Agent's address was not a candidate: %v", got)
+	}
+	// A client that holds a lease is not a chassis and must not be probed from
+	// the neighbour cache either.
+	for _, ip := range got {
+		if ip == "10.10.18.249" && !chassisMACs["f4:3b:d8:7f:cc:40"] {
+			// It IS in the lease file, but with a hostname that is not RoobuckAC
+			// and a MAC the topology does not know, so it must have been skipped.
+			t.Fatalf("an ordinary client was picked up as a Mesh chassis: %v", got)
+		}
+	}
+}
+
+// A lease and a neighbour entry can both name the same chassis. The lease is the
+// address the Root issued on purpose, so it is asked first and the address is
+// only offered once.
+func TestALeaseIsPreferredOverTheNeighbourCacheAndNeitherIsAskedTwice(t *testing.T) {
+	chassisMACs := map[string]bool{"dc:84:03:01:57:80": true}
+	const leases = "1 dc:84:03:01:57:80 10.10.18.127 RoobuckAC *\n"
+	const neighbours = "10.10.18.127 dev br-lan lladdr dc:84:03:01:57:80 REACHABLE\n"
+
+	got := easyMeshManagementCandidates(leases, neighbours, chassisMACs)
+	if len(got) != 1 || got[0] != "10.10.18.127" {
+		t.Fatalf("candidates = %v, want the address once", got)
+	}
+}
+
+// Entries the kernel has no MAC for carry nothing to match a chassis on.
+func TestNeighboursWithoutAnAddressAreIgnored(t *testing.T) {
+	const raw = "10.10.18.50 dev br-lan  FAILED\n" +
+		"10.10.18.51 dev br-lan  INCOMPLETE\n" +
+		"fe80::1 dev br-lan lladdr dc:84:03:01:57:80 STALE\n" +
+		"10.10.18.127 dev br-lan lladdr DC:84:03:01:57:80 used 0/0/0 probes 1 STALE\n"
+
+	got := easyMeshNeighbourAddresses(raw)
+	if len(got) != 1 {
+		t.Fatalf("neighbour addresses = %v, want only the IPv4 entry that has a MAC", got)
+	}
+	// Matching is done in lower case, the way the topology reports BSSIDs.
+	if got["dc:84:03:01:57:80"] != "10.10.18.127" {
+		t.Fatalf("neighbour addresses = %v, want the MAC lower-cased and mapped to its IPv4", got)
+	}
+}
+
+// The refresh exists because nothing else renews a handed-off Agent's address,
+// and it must not reach for the bridge: reloading netifd rebuilds br-lan and
+// takes down the Backhaul the exchange travels over.
+func TestTheLeaseRefreshRenewsWithoutTouchingTheBridge(t *testing.T) {
+	command := easyMeshAgentLeaseRefreshCommand()
+	for _, expected := range []string{"udhcpc", "-i " + clientBridgeName, "-q", "-n", "RoobuckAC"} {
+		if !strings.Contains(command, expected) {
+			t.Fatalf("refresh command is missing %q: %s", expected, command)
+		}
+	}
+	for _, forbidden := range []string{"ubus", "ifup", "ifdown", "wifi", "uci"} {
+		if strings.Contains(command, forbidden) {
+			t.Fatalf("the refresh performs the disruptive %q: %s", forbidden, command)
+		}
+	}
+}
+
+// Only a handed-off Agent holds an address the Root issued. A Controller issues
+// them, and an Agent that has not handed over still owns its own.
+func TestOnlyAHandedOffAgentRefreshesItsLease(t *testing.T) {
+	if !easyMeshAgentShouldRefreshLease(EasyMeshConfig{Enabled: true, Role: "agent", AgentHandoff: true}) {
+		t.Fatal("a handed-off Agent does not refresh the address the Root gave it")
+	}
+	for _, cfg := range []EasyMeshConfig{
+		{Enabled: true, Role: "agent", AgentHandoff: false},
+		{Enabled: true, Role: "controller", AgentHandoff: true},
+		{Enabled: false, Role: "agent", AgentHandoff: true},
+	} {
+		if easyMeshAgentShouldRefreshLease(cfg) {
+			t.Fatalf("%+v asked the Root to renew an address it does not hold", cfg)
+		}
+	}
+}
+
+// The window an Agent opens for the next chassis must accept the Mesh's own
+// answer on its own. Measured on the live Mesh: a chassis paired through such a
+// window in 62 seconds, the Mesh engine immediately moved it to the Root — which
+// scores a hop closer — and because the topology was only consulted after the
+// local station count had risen, the window ran its full five minutes and
+// reported that nobody had come, about a chassis that had joined.
+func TestADownstreamWindowAcceptsANewDeviceEvenWhenNoStationStays(t *testing.T) {
+	baseline := map[string]bool{
+		"f2:a8:82:fb:00:a4": true, // the Root
+		"de:84:03:11:57:80": true, // this Agent
+	}
+	joined := map[string]bool{
+		"f2:a8:82:fb:00:a4": true,
+		"de:84:03:11:57:80": true,
+		"f2:a8:82:fb:01:1c": true, // the chassis that just paired
+	}
+
+	if easyMeshTopologyHasNewDevice(baseline, baseline) {
+		t.Fatal("an unchanged topology was read as a new Agent arriving")
+	}
+	if !easyMeshTopologyHasNewDevice(joined, baseline) {
+		t.Fatal("a chassis that joined was not recognised")
+	}
+	// A device disappearing is not an arrival.
+	shrunk := map[string]bool{"f2:a8:82:fb:00:a4": true}
+	if easyMeshTopologyHasNewDevice(shrunk, baseline) {
+		t.Fatal("a topology that only lost a device was read as gaining one")
+	}
+}
+
+// The two signals must be independent: the topology check has to run before, and
+// regardless of, the local station count. Nesting it inside the station branch is
+// what produced the false negative.
+func TestTheTopologyCheckDoesNotDependOnTheStationCount(t *testing.T) {
+	source, err := os.ReadFile("easymesh.go")
+	if err != nil {
+		t.Fatalf("read easymesh.go: %v", err)
+	}
+	body := string(source)
+	start := strings.Index(body, "func maintainDownstreamOnboardingWindow(")
+	if start < 0 {
+		t.Fatal("maintainDownstreamOnboardingWindow is gone")
+	}
+	window := body[start:]
+	if end := strings.Index(window, "\nfunc "); end > 0 {
+		window = window[:end]
+	}
+
+	topologyAt := strings.Index(window, "easyMeshTopologyHasNewDevice")
+	stationsAt := strings.Index(window, "easyMeshBackhaulBSSStations")
+	if topologyAt < 0 || stationsAt < 0 {
+		t.Fatalf("the window no longer consults both signals (topology=%d stations=%d)", topologyAt, stationsAt)
+	}
+	if topologyAt > stationsAt {
+		t.Fatal("the topology is consulted after the station count again; a pairing the engine moves away is then missed")
+	}
+}

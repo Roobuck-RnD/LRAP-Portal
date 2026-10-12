@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The watchdog exists because a network reload drops interfaces out of br-lan
@@ -21,7 +22,15 @@ func TestClientBridgeWatchdogRepairsWithoutNetifd(t *testing.T) {
 		t.Fatal("the watchdog does not reattach the interface with brctl")
 	}
 	// Match invocations, not the comment that explains why they are absent.
-	for _, forbidden := range []string{`"ubus"`, `"ifup"`, `"ifdown"`, `"/sbin/wifi"`, `exec.Command("uci"`} {
+	//
+	// Reading uci is allowed and this used to forbid it outright, which is a
+	// different thing from what the rule is for. The watchdog has to know what
+	// the LAN is configured to hold before it can tell that the kernel is
+	// holding something else, and `uci -q get` changes nothing. What must stay
+	// out is anything that writes configuration or hands the interface back to
+	// netifd -- that is the damage this watchdog is repairing.
+	for _, forbidden := range []string{`"ubus"`, `"ifup"`, `"ifdown"`, `"/sbin/wifi"`,
+		`"uci", "set"`, `"uci", "commit"`, `"uci", "delete"`, `"uci", "-q", "set"`} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("the watchdog invokes the disruptive %s", forbidden)
 		}
@@ -118,6 +127,11 @@ func fakeNetSysfs(t *testing.T, bridgeExists bool, present []string, bridged []s
 	attached := make([]string, 0, 4)
 	attachToClientBridge = func(iface string) (string, error) {
 		attached = append(attached, iface)
+		// A real brctl addif takes effect, so the fake has to as well: a repair
+		// that never shows up in the bridge would make the caller repair forever.
+		if err := os.MkdirAll(filepath.Join(root, clientBridgeName, "brif", iface), 0o755); err != nil {
+			return "", err
+		}
 		return "", nil
 	}
 	return &attached
@@ -165,6 +179,221 @@ func TestTheWatchdogRunsWhateverTheMeshIsDoing(t *testing.T) {
 	for _, gate := range []string{"loadEasyMeshConfig", "cfg.Enabled", `Role != "agent"`, `Role == "agent"`} {
 		if strings.Contains(string(source), gate) {
 			t.Fatalf("the watchdog is gated on %s again; a standalone chassis needs it too", gate)
+		}
+	}
+}
+
+// The code that causes a reload has to put the radios back itself. Leaving it to
+// the watchdog's own schedule leaves the chassis on the air with nothing bridged
+// behind it for up to a full interval -- which on a factory unit building the
+// management VLAN for the first time meant it could only be repaired over serial.
+func TestAReloadPutsTheRadiosBackBeforeItReturns(t *testing.T) {
+	attached := fakeNetSysfs(t, true, []string{Mtk24GIfName, Mtk5GIfName}, nil)
+	shortSettle(t, 5*time.Second, 2)
+
+	settleClientBridgeAfterReload()
+
+	if len(*attached) != 2 {
+		t.Fatalf("reattached %v, want both radios returned to the bridge", *attached)
+	}
+}
+
+// netifd's reload is asynchronous: br-lan can be rebuilt again a second or two
+// after ubus has returned. A repair that ran once would be quietly undone.
+func TestTheSettleSurvivesASecondRebuild(t *testing.T) {
+	root := t.TempDir()
+	originalRoot := netSysfsRoot
+	originalAttach := attachToClientBridge
+	t.Cleanup(func() {
+		netSysfsRoot = originalRoot
+		attachToClientBridge = originalAttach
+	})
+	netSysfsRoot = root
+	shortSettle(t, 10*time.Second, 2)
+
+	brif := filepath.Join(root, clientBridgeName, "brif")
+	if err := os.MkdirAll(brif, 0o755); err != nil {
+		t.Fatalf("create bridge: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, Mtk24GIfName), 0o755); err != nil {
+		t.Fatalf("create radio: %v", err)
+	}
+
+	rebuilt := false
+	attaches := 0
+	attachToClientBridge = func(iface string) (string, error) {
+		attaches++
+		if err := os.MkdirAll(filepath.Join(brif, iface), 0o755); err != nil {
+			return "", err
+		}
+		// netifd rebuilds the bridge once more just after the first repair.
+		if !rebuilt {
+			rebuilt = true
+			if err := os.RemoveAll(filepath.Join(brif, iface)); err != nil {
+				return "", err
+			}
+		}
+		return "", nil
+	}
+
+	settleClientBridgeAfterReload()
+
+	if attaches < 2 {
+		t.Fatalf("repaired %d time(s); a single pass would have been undone by the rebuild", attaches)
+	}
+	if !interfaceIsBridged(clientBridgeName, Mtk24GIfName) {
+		t.Fatal("the radio was left out of the bridge after the second rebuild")
+	}
+}
+
+// A bridge that was never broken must not hold startup for the whole window.
+func TestTheSettleReturnsQuicklyWhenNothingIsBroken(t *testing.T) {
+	attached := fakeNetSysfs(t, true,
+		[]string{Mtk24GIfName, Mtk5GIfName},
+		[]string{Mtk24GIfName, Mtk5GIfName})
+	shortSettle(t, 30*time.Second, 2)
+
+	start := time.Now()
+	settleClientBridgeAfterReload()
+	elapsed := time.Since(start)
+
+	if len(*attached) != 0 {
+		t.Fatalf("a healthy bridge was 'repaired': %v", *attached)
+	}
+	// Two steady checks, one sleep between them -- nowhere near the window.
+	if elapsed > 5*time.Second {
+		t.Fatalf("a healthy bridge held startup for %s", elapsed.Round(time.Millisecond))
+	}
+}
+
+// shortSettle keeps the tests quick without hiding the real defaults.
+func shortSettle(t *testing.T, window time.Duration, steady int) {
+	t.Helper()
+	originalWindow, originalSteady := clientBridgeSettleWindow, clientBridgeSettleSteady
+	t.Cleanup(func() {
+		clientBridgeSettleWindow = originalWindow
+		clientBridgeSettleSteady = originalSteady
+	})
+	clientBridgeSettleWindow = window
+	clientBridgeSettleSteady = steady
+}
+
+// ---------- the client bridge keeps the prefix its configuration asks for ----------
+
+// fakeClientLAN replaces the three seams the address repair reads and writes
+// through, and records every ip(8) call it makes.
+func fakeClientLAN(t *testing.T, proto, ipaddr, netmask string, held []string) *[]string {
+	t.Helper()
+	calls := []string{}
+	realUCI, realShow, realChange := uciClientLANAddress, clientBridgeIPv4, changeClientBridgeAddress
+	t.Cleanup(func() {
+		uciClientLANAddress, clientBridgeIPv4, changeClientBridgeAddress = realUCI, realShow, realChange
+	})
+	uciClientLANAddress = func() (string, string, string) { return proto, ipaddr, netmask }
+	clientBridgeIPv4 = func() ([]string, error) { return held, nil }
+	changeClientBridgeAddress = func(op string, cidr string) (string, error) {
+		calls = append(calls, op+" "+cidr)
+		return "", nil
+	}
+	return &calls
+}
+
+// The defect this exists for, as measured on the device: uci asks for a /24,
+// the vendor EasyMesh script had put the address on with a classful /8, and
+// netifd reported the interface up on mask 24 the whole time.
+func TestClientBridgeClassfulPrefixIsCorrected(t *testing.T) {
+	calls := fakeClientLAN(t, "static", "10.10.18.1", "255.255.255.0", []string{"10.10.18.1/8"})
+	if !reconcileClientBridgeAddress() {
+		t.Fatal("a bridge holding the wrong prefix was reported as healthy")
+	}
+	want := []string{"add 10.10.18.1/24", "del 10.10.18.1/8"}
+	if len(*calls) != len(want) {
+		t.Fatalf("expected %v, got %v", want, *calls)
+	}
+	for index, call := range want {
+		if (*calls)[index] != call {
+			t.Fatalf("expected %v, got %v", want, *calls)
+		}
+	}
+}
+
+// Adding before removing is the point of the order: the bridge must never be
+// left without an address, and the kernel holds both prefixes happily.
+func TestClientBridgeGainsTheRightPrefixBeforeLosingTheWrongOne(t *testing.T) {
+	calls := fakeClientLAN(t, "static", "10.10.18.1", "255.255.255.0", []string{"10.10.18.1/8"})
+	reconcileClientBridgeAddress()
+	if len(*calls) < 2 || !strings.HasPrefix((*calls)[0], "add ") || !strings.HasPrefix((*calls)[1], "del ") {
+		t.Fatalf("the repair must add before it removes, got %v", *calls)
+	}
+}
+
+// An Agent that has handed over to the Root runs on a DHCP lease. Its address
+// is not this watchdog's to assert, whatever the stale static block says.
+func TestClientBridgeAddressIsLeftAloneUnderDHCP(t *testing.T) {
+	calls := fakeClientLAN(t, "dhcp", "10.10.18.1", "255.255.255.0", []string{"10.10.18.128/23"})
+	if reconcileClientBridgeAddress() || len(*calls) != 0 {
+		t.Fatalf("a DHCP LAN was interfered with: %v", *calls)
+	}
+}
+
+// The handoff safety property, and the reason the rule is "fix what is there"
+// rather than "make sure it is there".
+//
+// udhcpc flushes br-lan between deconfig and bound. Putting the static address
+// back in that gap would leave 10.10.18.1 on the bridge, and the handoff decides
+// it is done by seeing an address that is NOT 10.10.18.1 -- so a helpful
+// watchdog would make a working handoff time out as no-root-dhcp-lease.
+func TestClientBridgeAddressIsNeverInventedWhenAbsent(t *testing.T) {
+	calls := fakeClientLAN(t, "static", "10.10.18.1", "255.255.255.0", nil)
+	if reconcileClientBridgeAddress() || len(*calls) != 0 {
+		t.Fatalf("the watchdog created an address that was deliberately absent: %v", *calls)
+	}
+}
+
+// A healthy bridge is not touched, and neither is anything else living on it --
+// the Root carries a second, unrelated address on br-lan.
+func TestClientBridgeLeavesAHealthyBridgeAndItsOtherAddressesAlone(t *testing.T) {
+	calls := fakeClientLAN(t, "static", "10.10.18.1", "255.255.254.0",
+		[]string{"10.10.18.1/23", "10.95.64.6/24"})
+	if reconcileClientBridgeAddress() || len(*calls) != 0 {
+		t.Fatalf("a healthy bridge was changed: %v", *calls)
+	}
+}
+
+func TestNetmaskPrefix(t *testing.T) {
+	for mask, want := range map[string]int{
+		"255.255.255.0":   24,
+		"255.255.254.0":   23,
+		"255.0.0.0":       8,
+		"255.255.255.255": 32,
+	} {
+		got, ok := netmaskPrefix(mask)
+		if !ok || got != want {
+			t.Fatalf("%s: expected /%d, got /%d ok=%v", mask, want, got, ok)
+		}
+	}
+	// Holes, short forms and junk are not netmasks, and a mask that cannot be
+	// read must leave the bridge alone rather than guess at a prefix.
+	for _, bad := range []string{"255.0.255.0", "255.255.255", "0.0.0.0", "", "abc", "255.255.255.256"} {
+		if _, ok := netmaskPrefix(bad); ok {
+			t.Fatalf("%q was accepted as a netmask", bad)
+		}
+	}
+}
+
+func TestParseIPv4CIDRs(t *testing.T) {
+	// Exactly the shape the device produced: the stray classful address first,
+	// and the Root's unrelated second address behind it.
+	raw := `22: br-lan    inet 10.10.18.1/8 brd 10.255.255.255 scope global br-lan
+22: br-lan    inet 10.95.64.6/24 brd 10.95.64.255 scope global br-lan`
+	got := parseIPv4CIDRs(raw)
+	want := []string{"10.10.18.1/8", "10.95.64.6/24"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %v, got %v", want, got)
+	}
+	for index, address := range want {
+		if got[index] != address {
+			t.Fatalf("expected %v, got %v", want, got)
 		}
 	}
 }

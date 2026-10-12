@@ -19,6 +19,8 @@ const ACManagementIP = "10.10.18.1"
 const (
 	AntennaManagementACIP   = "172.31.255.1"
 	AntennaManagementBridge = "br-mgmt"
+	// The netifd interface that owns that bridge.
+	AntennaManagementInterface = "antenna_mgmt"
 )
 
 // Legacy marker recording that a Mesh migration completed. Isolation is decided
