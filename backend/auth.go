@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"log"
 	"net/http"
 	"strings"
 )
@@ -31,12 +33,38 @@ func ubusSessionValid(sid string) bool {
 }
 
 // withAuth is the single enforcement point for authenticated endpoints. It
-// rejects any request that does not carry a valid ubus session token before the
-// wrapped handler runs, so individual handlers no longer need to (and must not)
-// decide on their own whether the Authorization header is trustworthy.
+// rejects any request that does not carry a valid session before the wrapped
+// handler runs, so individual handlers no longer need to (and must not) decide
+// on their own whether the Authorization header is trustworthy.
+//
+// A person's portal session (sessions.go) is swapped for the backend's own
+// privileged ubus session before the handler sees the request: handlers pass
+// the bearer token to rpcd, and that token is what may act. The account it was
+// signed in with travels in the request context (sessionUser). The agent's
+// rpcd session is passed through as it is.
 func withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !ubusSessionValid(bearerSID(r)) {
+		token := bearerSID(r)
+		if isPortalToken(token) {
+			user, ok := lookupSession(token)
+			if !ok {
+				w.Header().Set("Content-Type", "application/json")
+				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+				return
+			}
+			sid, err := privilegedSID()
+			if err != nil {
+				log.Printf("no privileged ubus session: %v", err)
+				w.Header().Set("Content-Type", "application/json")
+				http.Error(w, `{"error":"service unavailable"}`, http.StatusServiceUnavailable)
+				return
+			}
+			acting := r.Clone(context.WithValue(r.Context(), userKey{}, user))
+			acting.Header.Set("Authorization", "Bearer "+sid)
+			next(w, acting)
+			return
+		}
+		if !ubusSessionValid(token) {
 			w.Header().Set("Content-Type", "application/json")
 			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 			return

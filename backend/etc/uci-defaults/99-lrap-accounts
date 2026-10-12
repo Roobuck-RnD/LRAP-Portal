@@ -1,0 +1,31 @@
+#!/bin/sh
+# The customer's account, admin: it signs in to the portal, where it can use
+# everything the portal offers, and to SSH as an ordinary user, where it can
+# look but change nothing. root is for our own staff.
+#
+# Created on the first boot of every image, because sysupgrade keeps the old
+# /etc/passwd, /etc/group and /etc/shadow, so an account an image adds would
+# otherwise never appear on a unit that is upgraded. It starts with the
+# password admin, the same on every unit; the customer can change it in the
+# portal. An account that already exists keeps the password it has.
+
+grep -q '^admin:' /etc/group || echo 'admin:x:1000:' >> /etc/group
+grep -q '^admin:' /etc/passwd || echo 'admin:x:1000:1000:LRAP customer:/home/admin:/bin/ash' >> /etc/passwd
+# The password is admin.
+grep -q '^admin:' /etc/shadow || echo 'admin:$1$0mN4mrJX$butHhBqTGCeQ5DqkkRw5p1:20000:0:99999:7:::' >> /etc/shadow
+mkdir -p /home/admin
+chown admin:admin /home/admin
+chmod 700 /home/admin
+
+# rpcd checks the portal password against the same account ($p$admin), and
+# grants it nothing but signing in (/usr/share/rpcd/acl.d/lrap-login.json).
+if ! uci -q show rpcd | grep -q "\.username='admin'"; then
+	section=$(uci add rpcd login)
+	uci set rpcd."$section".username='admin'
+	uci set rpcd."$section".password='$p$admin'
+	uci add_list rpcd."$section".read='lrap-login'
+	uci add_list rpcd."$section".write='lrap-login'
+	uci commit rpcd
+fi
+
+exit 0

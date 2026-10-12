@@ -78,6 +78,7 @@ function handleUnauthorized() {
   sessionStorage.removeItem('isLoggedIn');
   sessionStorage.removeItem('token');
   sessionStorage.removeItem('username');
+  sessionStorage.removeItem('role');
   clearPageDataCache();
 
   // token 过期只改 hash、不整页刷新,内存态不会自动清,所以显式退出开发者模式。
