@@ -39,6 +39,8 @@ export function NavUser({
   const { devMode, setDevMode } = useDevModeStore()
 
   const isRoot = sessionStorage.getItem('role') === 'root'
+  // The account actually signed in (root or admin), not a fixed label.
+  const name = sessionStorage.getItem('username') || user.name
 
   const handleLogout = () => {
     // 登出即退出开发者模式,回到默认隐藏状态。
@@ -54,6 +56,7 @@ export function NavUser({
     sessionStorage.removeItem('isLoggedIn')
     sessionStorage.removeItem('token')
     sessionStorage.removeItem('role')
+    sessionStorage.removeItem('username')
 
     localStorage.removeItem('isLoggedIn')
     localStorage.removeItem('token')
@@ -73,13 +76,13 @@ export function NavUser({
               className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
             >
               <Avatar className="h-8 w-8 rounded-lg">
-                <AvatarImage src={user.avatar} alt={user.name} />
+                <AvatarImage src={user.avatar} alt={name} />
                 <AvatarFallback className="rounded-lg bg-primary/10 text-primary">
                   <UserCog className="size-4" />
                 </AvatarFallback>
               </Avatar>
               <div className="grid flex-1 text-left text-sm leading-tight">
-                <span className="truncate font-semibold">{user.name}</span>
+                <span className="truncate font-semibold">{name}</span>
                 <span className="truncate text-xs">{user.email}</span>
               </div>
               <ChevronsUpDown className="ml-auto size-4" />
