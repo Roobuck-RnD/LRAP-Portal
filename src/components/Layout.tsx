@@ -38,6 +38,7 @@ const ROUTE_BREADCRUMB: Record<string, { group: string; label: string }> = {
   '/DHCPandDNS': { group: 'Network', label: 'DHCP and DNS' },
   '/hostnames': { group: 'Network', label: 'Hostnames' },
   '/staticroutes': { group: 'Network', label: 'Static Routes' },
+  '/vlans': { group: 'Network', label: 'VLANs' },
   '/firewall': { group: 'Network', label: 'Firewall' },
   '/diagnostics': { group: 'Network', label: 'Diagnostics' },
   '/ipsecurity': { group: 'Network', label: 'IP Security' },
