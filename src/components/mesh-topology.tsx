@@ -89,6 +89,22 @@ const MAX_CLIENT_ROWS = 6
 const GAP_X = 32
 const GAP_Y = 92
 const PADDING = 18
+// Headroom above the chassis row for a Backhaul routed over one.
+const BACKHAUL_ARC = 96
+/**
+ * Room a hop label needs, measured on the widest it gets: the medium and a
+ * three-digit reading, "2.4 GHz -128 dBm", at 10px with its dot and padding.
+ */
+const HOP_LABEL_WIDTH = 140
+/**
+ * Space between two chassis columns.
+ *
+ * A hop between neighbours is drawn across this gap and its label sits on the
+ * middle of that line, so the gap has to be wider than the label or the reading
+ * is printed over both cards -- which is exactly what a 32px gap did. Antennas
+ * inside a column still use the ordinary GAP_X.
+ */
+const COLUMN_GAP = HOP_LABEL_WIDTH + 32
 
 type SignalGrade = 'strong' | 'fair' | 'weak' | 'unknown'
 
@@ -142,13 +158,37 @@ function clientPanelHeight(count: number): number {
   return CLIENT_GAP + rows * CLIENT_ROW - CLIENT_GAP / 2 + overflow
 }
 
+export type MeshColumn = {
+  chassis: TreeNode
+  antennas: TreeNode[]
+  x: number
+  width: number
+}
+
+export type MeshHop = {
+  from: TreeNode
+  to: TreeNode
+  link: MeshTopologyLink
+  /** Whether a column belonging to someone else stands between the two. */
+  spans: boolean
+}
+
 /**
- * Build the fabric as a tree rather than as rows of equals: a chassis owns its
- * Antennas and its downstream Mesh hops, and an Antenna owns the end devices it
- * serves. Clients hang under their own parent as a list rather than as siblings,
- * so a busy Antenna grows downwards instead of pushing the whole drawing wide.
+ * Lay the fabric out as one row of chassis, each chassis's own Antennas in the
+ * band directly beneath it, and each Antenna's end devices listed downwards
+ * inside its card.
+ *
+ * Hop depth is deliberately not depth on the page. Drawing the Mesh as a tree
+ * put every further hop on its own row, so a chain grew as tall as it was wide
+ * and the first chassis's Antennas sat level with the second chassis, reading as
+ * though they belonged to it. Every chassis is a main module whatever its
+ * distance from the Root, so they share a row and the Backhaul between them is
+ * drawn as an arc above it.
+ *
+ * A column is as wide as the wider of its chassis and its row of Antennas, so
+ * one chassis's Antennas can never stray under its neighbour.
  */
-function buildForest(graph: MeshTopologyGraph): TreeNode[] {
+function buildColumns(graph: MeshTopologyGraph): { columns: MeshColumn[]; hops: MeshHop[] } {
   const clientsByParent = new Map<string, MeshTopologyClient[]>()
   for (const client of graph.clients ?? []) {
     const bucket = clientsByParent.get(client.parent_id)
@@ -174,84 +214,161 @@ function buildForest(graph: MeshTopologyGraph): TreeNode[] {
   for (const chassis of graph.nodes ?? []) {
     chassisNodes.set(chassis.al_id, makeNode({ id: chassis.al_id, kind: 'chassis', chassis }))
   }
-
   for (const antenna of graph.antennas ?? []) {
     const parent = chassisNodes.get(antenna.chassis_al_id)
     if (parent) parent.children.push(makeNode({ id: antenna.id, kind: 'antenna', antenna }))
   }
 
-  const hasParent = new Set<string>()
+  // One uplink per chassis: the first link that claims it wins, exactly as the
+  // tree used to decide parentage, so a duplicate report cannot fork the row.
+  const hops: MeshHop[] = []
+  const downstream = new Map<string, string[]>()
+  const hasUplink = new Set<string>()
   for (const link of graph.links ?? []) {
     const from = chassisNodes.get(link.from_al_id)
     const to = chassisNodes.get(link.to_al_id)
-    if (!from || !to || hasParent.has(link.to_al_id)) continue
-    from.children.push(to)
-    hasParent.add(link.to_al_id)
+    if (!from || !to || from === to || hasUplink.has(link.to_al_id)) continue
+    hasUplink.add(link.to_al_id)
+    hops.push({ from, to, link, spans: false })
+    const bucket = downstream.get(link.from_al_id)
+    if (bucket) bucket.push(link.to_al_id)
+    else downstream.set(link.from_al_id, [link.to_al_id])
   }
 
-  return [...chassisNodes.values()].filter((node) => !hasParent.has(node.id))
+  // Order the row so a chassis stands next to the one it hangs off. An arc still
+  // reaches a chassis that a sibling's subtree has pushed further along, but the
+  // ordinary chain and star both come out adjacent.
+  const ordered: TreeNode[] = []
+  const placed = new Set<string>()
+  const walk = (alID: string) => {
+    const node = chassisNodes.get(alID)
+    if (!node || placed.has(alID)) return
+    placed.add(alID)
+    ordered.push(node)
+    for (const child of downstream.get(alID) ?? []) walk(child)
+  }
+  for (const alID of chassisNodes.keys()) if (!hasUplink.has(alID)) walk(alID)
+  // A chassis whose uplink was never described still belongs on the row.
+  for (const [alID, node] of chassisNodes) {
+    if (placed.has(alID)) continue
+    placed.add(alID)
+    ordered.push(node)
+  }
+
+  const columns = ordered.map((chassis) => {
+    const antennas = chassis.children
+    return { chassis, antennas, x: 0, width: Math.max(chassis.width, spanOf(antennas)) }
+  })
+
+  // The row is ordered so a chassis usually stands next to the one it hangs
+  // off, but a Root with two Agents reaches the second across the first. Those
+  // hops cannot be drawn as a plain line between the two.
+  const columnOf = new Map<string, number>()
+  columns.forEach((column, index) => columnOf.set(column.chassis.id, index))
+  for (const hop of hops) {
+    const from = columnOf.get(hop.from.id) ?? 0
+    const to = columnOf.get(hop.to.id) ?? 0
+    hop.spans = Math.abs(from - to) > 1
+  }
+
+  return { columns, hops }
 }
 
-/** Tidy-tree placement: a parent is centred over the span its children occupy. */
-function layoutForest(roots: TreeNode[]): { width: number; height: number } {
-  const rowHeights: number[] = []
-  const measureDepth = (node: TreeNode, depth: number) => {
-    rowHeights[depth] = Math.max(rowHeights[depth] ?? 0, node.height)
-    node.children.forEach((child) => measureDepth(child, depth + 1))
-  }
-  roots.forEach((root) => measureDepth(root, 0))
+/** Width a row of nodes occupies, gaps included. */
+function spanOf(nodes: TreeNode[]): number {
+  if (!nodes.length) return 0
+  return nodes.reduce((total, node) => total + node.width, 0) + GAP_X * (nodes.length - 1)
+}
 
-  const rowTops: number[] = []
+/**
+ * Place every column: chassis on one row, that column's Antennas on the next.
+ *
+ * Headroom above the chassis row is only reserved when a hop actually has to be
+ * routed over one, so an ordinary chain costs no empty space at the top.
+ */
+function layoutColumns(columns: MeshColumn[], needsHeadroom: boolean): { width: number; height: number } {
+  const chassisTop = needsHeadroom ? BACKHAUL_ARC : 0
+  let chassisRow = 0
+  let antennaRow = 0
+  for (const column of columns) {
+    chassisRow = Math.max(chassisRow, column.chassis.height)
+    for (const antenna of column.antennas) antennaRow = Math.max(antennaRow, antenna.height)
+  }
+
+  const antennaTop = chassisTop + chassisRow + GAP_Y
   let cursor = 0
-  rowHeights.forEach((height, depth) => {
-    rowTops[depth] = cursor
-    cursor += height + GAP_Y
-  })
+  for (const column of columns) {
+    column.x = cursor
+    column.chassis.x = cursor + (column.width - column.chassis.width) / 2
+    column.chassis.y = chassisTop
 
-  const place = (node: TreeNode, left: number, depth: number): number => {
-    node.y = rowTops[depth]
-    if (!node.children.length) {
-      node.x = left
-      return node.width
+    let antennaLeft = cursor + (column.width - spanOf(column.antennas)) / 2
+    for (const antenna of column.antennas) {
+      antenna.x = antennaLeft
+      antenna.y = antennaTop
+      antennaLeft += antenna.width + GAP_X
     }
-    let childLeft = left
-    let span = 0
-    node.children.forEach((child, index) => {
-      const childSpan = place(child, childLeft, depth + 1)
-      childLeft += childSpan + GAP_X
-      span += childSpan + (index ? GAP_X : 0)
-    })
-    if (span < node.width) {
-      // A single narrow child would otherwise sit off to one side of its parent.
-      const shift = (node.width - span) / 2
-      const nudge = (child: TreeNode) => {
-        child.x += shift
-        child.children.forEach(nudge)
-      }
-      node.children.forEach(nudge)
-      span = node.width
-    }
-    node.x = left + (span - node.width) / 2
-    return span
+    cursor += column.width + COLUMN_GAP
   }
 
-  let offset = 0
-  roots.forEach((root) => {
-    offset += place(root, offset, 0) + GAP_X
-  })
-
-  const width = Math.max(offset - GAP_X, CHASSIS_WIDTH)
-  const height = cursor > 0 ? cursor - GAP_Y : CHASSIS_HEIGHT
-  return { width, height }
+  return {
+    width: Math.max(cursor - COLUMN_GAP, CHASSIS_WIDTH),
+    height: chassisTop + chassisRow + (antennaRow ? GAP_Y + antennaRow : 0)
+  }
 }
 
-function flatten(roots: TreeNode[]): TreeNode[] {
-  const out: TreeNode[] = []
-  const walk = (node: TreeNode) => {
-    out.push(node)
-    node.children.forEach(walk)
+/**
+ * A Backhaul hop, drawn with straight segments.
+ *
+ * Neighbours are joined by a plain horizontal line across the gap between their
+ * cards, which is the whole of it for a chain. A hop that reaches past a column
+ * belonging to someone else -- a Root with two Agents reaches the second across
+ * the first -- turns instead and goes over the top, because a straight line
+ * between those two centres would be drawn through the card standing between
+ * them. Both are straight lines; only the route differs.
+ */
+function backhaulRoute(hop: MeshHop): {
+  path: string
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+  labelX: number
+  labelY: number
+} {
+  const { from, to } = hop
+
+  if (!hop.spans) {
+    // Both cards share the row, so the line rides the middle of the shorter one
+    // and stops at the facing edges rather than at the centres.
+    const [left, right] = from.x <= to.x ? [from, to] : [to, from]
+    const y = from.y + Math.min(from.height, to.height) / 2
+    const x1 = left.x + left.width
+    const x2 = right.x
+    return { path: 'M ' + x1 + ' ' + y + ' L ' + x2 + ' ' + y, x1, y1: y, x2, y2: y, labelX: (x1 + x2) / 2, labelY: y }
   }
-  roots.forEach(walk)
+
+  const x1 = from.x + from.width / 2
+  const x2 = to.x + to.width / 2
+  const top = Math.min(from.y, to.y)
+  const rail = Math.max(8, top - BACKHAUL_ARC + 28)
+  return {
+    path: 'M ' + x1 + ' ' + top + ' L ' + x1 + ' ' + rail + ' L ' + x2 + ' ' + rail + ' L ' + x2 + ' ' + top,
+    x1,
+    y1: top,
+    x2,
+    y2: top,
+    labelX: (x1 + x2) / 2,
+    labelY: rail
+  }
+}
+
+function flattenColumns(columns: MeshColumn[]): TreeNode[] {
+  const out: TreeNode[] = []
+  for (const column of columns) {
+    out.push(column.chassis)
+    out.push(...column.antennas)
+  }
   return out
 }
 
@@ -514,17 +631,17 @@ function zoomAbout(view: View, factor: number, px: number, py: number): View {
 }
 
 export function MeshTopology({ graph, className }: { graph: MeshTopologyGraph; className?: string }) {
-  const { nodes, width, height } = useMemo(() => {
-    const roots = buildForest(graph)
-    const size = layoutForest(roots)
-    return { nodes: flatten(roots), width: size.width, height: size.height }
+  const { nodes, columns, hops, width, height } = useMemo(() => {
+    const built = buildColumns(graph)
+    const size = layoutColumns(built.columns, built.hops.some((hop) => hop.spans))
+    return {
+      nodes: flattenColumns(built.columns),
+      columns: built.columns,
+      hops: built.hops,
+      width: size.width,
+      height: size.height
+    }
   }, [graph])
-
-  const linkByTarget = useMemo(() => {
-    const byTarget = new Map<string, MeshTopologyLink>()
-    for (const link of graph.links ?? []) byTarget.set(link.to_al_id, link)
-    return byTarget
-  }, [graph.links])
 
   const canvasWidth = width + PADDING * 2
   const canvasHeight = height + PADDING * 2
@@ -691,50 +808,69 @@ export function MeshTopology({ graph, className }: { graph: MeshTopologyGraph; c
             aria-hidden="true"
           >
             <g transform={'translate(' + PADDING + ' ' + PADDING + ')'}>
-              {nodes.flatMap((parent) =>
-                parent.children.map((child) => {
-                  const link = child.kind === 'chassis' ? linkByTarget.get(child.id) : undefined
-                  const wireless = link?.wireless ?? false
-                  const grade = wireless ? gradeRSSI(link?.rssi) : 'unknown'
-                  // A wired Antenna uplink is drawn plainly; only a Mesh hop is
-                  // coloured by signal, because only it can degrade.
-                  const stroke = wireless ? gradeStroke[grade] : 'var(--border)'
-
-                  const x1 = parent.x + parent.width / 2
-                  const y1 = parent.y + parent.height
-                  const x2 = child.x + child.width / 2
-                  const y2 = child.y
+              {columns.flatMap((column) =>
+                column.antennas.map((antenna) => {
+                  // An Antenna hangs off its own chassis on a cable, so it is
+                  // drawn plainly: only a Backhaul can degrade.
+                  const x1 = column.chassis.x + column.chassis.width / 2
+                  const y1 = column.chassis.y + column.chassis.height
+                  const x2 = antenna.x + antenna.width / 2
+                  const y2 = antenna.y
                   const curve = Math.max(24, (y2 - y1) / 2)
                   const path =
                     'M ' + x1 + ' ' + y1 + ' C ' + x1 + ' ' + (y1 + curve) + ', ' + x2 + ' ' + (y2 - curve) + ', ' + x2 + ' ' + y2
 
                   return (
-                    <g key={parent.id + '>' + child.id}>
+                    <g key={column.chassis.id + '>' + antenna.id}>
                       <path
                         d={path}
                         fill="none"
-                        stroke={stroke}
-                        strokeOpacity={wireless ? 0.3 : 0.85}
-                        strokeWidth={wireless ? 2 : 1.5}
-                        strokeDasharray={wireless ? undefined : '4 4'}
+                        stroke="var(--border)"
+                        strokeOpacity={0.85}
+                        strokeWidth={1.5}
+                        strokeDasharray="4 4"
                       />
-                      {wireless ? (
-                        <path
-                          d={path}
-                          pathLength="1"
-                          fill="none"
-                          stroke={stroke}
-                          strokeWidth="3"
-                          strokeLinecap="round"
-                          className="topo-link-flow"
-                        />
-                      ) : null}
-                      <circle cx={x1} cy={y1} r="3" fill={stroke} className={wireless ? 'topo-node-pulse' : undefined} />
-                      <circle cx={x2} cy={y2} r="3" fill={stroke} />
+                      <circle cx={x1} cy={y1} r="3" fill="var(--border)" />
+                      <circle cx={x2} cy={y2} r="3" fill="var(--border)" />
                     </g>
                   )
                 })
               )}
+
+              {hops.map((hop) => {
+                const { from, to, link } = hop
+                const grade = link.wireless ? gradeRSSI(link.rssi) : 'unknown'
+                const stroke = link.wireless ? gradeStroke[grade] : 'var(--border)'
+                const route = backhaulRoute(hop)
+
+                return (
+                  <g key={from.id + '>' + to.id}>
+                    <path
+                      d={route.path}
+                      fill="none"
+                      stroke={stroke}
+                      strokeOpacity={link.wireless ? 0.3 : 0.85}
+                      strokeWidth={link.wireless ? 2 : 1.5}
+                      strokeLinejoin="round"
+                      strokeDasharray={link.wireless ? undefined : '4 4'}
+                    />
+                    {link.wireless ? (
+                      <path
+                        d={route.path}
+                        pathLength="1"
+                        fill="none"
+                        stroke={stroke}
+                        strokeWidth="3"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className="topo-link-flow"
+                      />
+                    ) : null}
+                    <circle cx={route.x1} cy={route.y1} r="3" fill={stroke} className={link.wireless ? 'topo-node-pulse' : undefined} />
+                    <circle cx={route.x2} cy={route.y2} r="3" fill={stroke} />
+                  </g>
+                )
+              })}
             </g>
           </svg>
 
@@ -745,34 +881,27 @@ export function MeshTopology({ graph, className }: { graph: MeshTopologyGraph; c
               </div>
             ))}
 
-            {/* Hop labels ride above the cards so the signal reading stays legible. */}
-            {nodes.flatMap((parent) =>
-              parent.children
-                .filter((child) => child.kind === 'chassis')
-                .map((child) => {
-                  const link = linkByTarget.get(child.id)
-                  if (!link) return null
-                  const grade = link.wireless ? gradeRSSI(link.rssi) : 'strong'
-                  const dBm = (link.rssi ?? '').trim()
+            {/* Hop labels ride on the link, clear of every card. */}
+            {hops.map((hop) => {
+              const { from, to, link } = hop
+              const grade = link.wireless ? gradeRSSI(link.rssi) : 'strong'
+              const dBm = (link.rssi ?? '').trim()
+              const route = backhaulRoute(hop)
 
-                  return (
-                    <div
-                      key={'label-' + parent.id + '>' + child.id}
-                      className="absolute -translate-x-1/2 -translate-y-1/2"
-                      style={{
-                        left: (parent.x + parent.width / 2 + child.x + child.width / 2) / 2,
-                        top: (parent.y + parent.height + child.y) / 2
-                      }}
-                    >
-                      <span className="flex items-center gap-1.5 rounded-full border border-border/70 bg-background/90 px-2.5 py-1 text-[10px] whitespace-nowrap shadow-sm backdrop-blur-md">
-                        <span className={cn('status-dot size-1.5', gradeText[grade], link.wireless && 'status-dot--live')} />
-                        <span className="font-medium text-foreground">{link.medium || 'Backhaul'}</span>
-                        {dBm && dBm !== 'NA' ? <span className={cn('data', gradeText[grade])}>{dBm} dBm</span> : null}
-                      </span>
-                    </div>
-                  )
-                })
-            )}
+              return (
+                <div
+                  key={'label-' + from.id + '>' + to.id}
+                  className="absolute -translate-x-1/2 -translate-y-1/2"
+                  style={{ left: route.labelX, top: route.labelY }}
+                >
+                  <span className="flex items-center gap-1.5 rounded-full border border-border/70 bg-background/90 px-2.5 py-1 text-[10px] whitespace-nowrap shadow-sm backdrop-blur-md">
+                    <span className={cn('status-dot size-1.5', gradeText[grade], link.wireless && 'status-dot--live')} />
+                    <span className="font-medium text-foreground">{link.medium || 'Backhaul'}</span>
+                    {dBm && dBm !== 'NA' ? <span className={cn('data', gradeText[grade])}>{dBm} dBm</span> : null}
+                  </span>
+                </div>
+              )
+            })}
           </div>
         </div>
 

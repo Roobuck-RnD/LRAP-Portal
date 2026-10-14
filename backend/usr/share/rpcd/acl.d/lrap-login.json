@@ -1,0 +1,10 @@
+{
+  "lrap-login": {
+    "description": "A person's portal account (admin): it may sign in and nothing more. Everything the portal does, lrapServer does with its own session (backend/sessions.go), so this password used directly against /ubus can change nothing.",
+    "read": {
+      "ubus": {
+        "session": [ "access" ]
+      }
+    }
+  }
+}

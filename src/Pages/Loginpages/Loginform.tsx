@@ -26,17 +26,18 @@ export function LoginForm({ className, ...props }: React.ComponentPropsWithoutRe
     setLoading(true)
 
     try {
-      const token = await authenticateWithOpenWrt(username, password)
+      const signedIn = await authenticateWithOpenWrt(username, password)
 
-      if (!token) {
+      if (!signedIn) {
         setError('Incorrect username or password')
         return
       }
 
       clearPageDataCache()
       sessionStorage.setItem('isLoggedIn', 'true')
-      sessionStorage.setItem('token', token)
+      sessionStorage.setItem('token', signedIn.token)
       sessionStorage.setItem('username', username)
+      sessionStorage.setItem('role', signedIn.role)
       navigate('/')
     } finally {
       setLoading(false)

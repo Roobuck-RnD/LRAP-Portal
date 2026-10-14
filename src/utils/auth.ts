@@ -1,7 +1,9 @@
 // utils/auth.ts
 import { apiFetch } from "./http";
 
-export async function authenticateWithOpenWrt(username: string, password: string) {
+// The session token and the account's role ("root" for our own staff, "user"
+// for the customer's admin account), or null when sign-in is refused.
+export async function authenticateWithOpenWrt(username: string, password: string): Promise<{ token: string; role: string } | null> {
   try {
     const res = await apiFetch('/api/sessions', {
       method: 'POST',
@@ -13,8 +15,9 @@ export async function authenticateWithOpenWrt(username: string, password: string
 
     if (!res.ok) return null;             // 401 等都直接返回 null
 
-    const data: { token?: string } = await res.json();
-    return data.token ?? null;            // token 就是 ubus sid
+    // A portal session token (backend/sessions.go), not an rpcd session id.
+    const data: { token?: string; role?: string } = await res.json();
+    return data.token ? { token: data.token, role: data.role ?? 'user' } : null;
   } catch (e) {
     console.error('Fail to Sign in', e);
     return null;

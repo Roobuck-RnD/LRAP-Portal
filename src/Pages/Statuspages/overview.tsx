@@ -126,16 +126,12 @@ type StaticView = {
   error?: string
 }
 
-const RESERVED_AP_DHCP_IPS = new Set(['10.10.18.2', '10.10.18.3', '10.10.18.4', '10.10.18.5'])
+
 const OVERVIEW_SYSTEM_CACHE_KEY = 'status.overview.system'
 const OVERVIEW_MEMORY_CACHE_KEY = 'status.overview.memory'
 const OVERVIEW_NETWORK_CACHE_KEY = 'status.overview.network'
 const OVERVIEW_LEASES_CACHE_KEY = 'status.overview.leases'
 const OVERVIEW_STATIC_CACHE_KEY = 'status.overview.static-map'
-
-function isReservedAPLease(lease: LeaseInfo): boolean {
-  return RESERVED_AP_DHCP_IPS.has(String(lease.ip || '').trim())
-}
 
 // 小工具:label 在上、value 在下的一格键值对。value 支持 mono(数据)。
 function Field({ label, value, mono }: { label: string; value?: string; mono?: boolean }) {
@@ -354,9 +350,10 @@ function Overview(): JSX.Element {
 
         if (cancelledRef?.cancelled) return
 
-        const visibleLeases = Array.isArray(leases)
-          ? leases.filter((lease) => !isReservedAPLease(lease))
-          : []
+        // Antenna leases used to land in the client pool at 10.10.18.2-5 and were
+        // filtered out of this list. They are now on the Antenna management VLAN
+        // and never appear here, so anything that does show up is a real client.
+        const visibleLeases = Array.isArray(leases) ? leases : []
 
         const nextLeaseView: LeaseView = {
           name: mainModule?.name || 'Router',

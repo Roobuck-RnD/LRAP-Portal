@@ -13,3 +13,12 @@ config login
 
 config file
        	list path '/tmp/dhcp.leases'
+
+# The customer's account. The password is the admin Linux account's, so the
+# same one signs in to SSH, where admin is an ordinary user. In rpcd it may only
+# sign in; the portal acts with its own session (backend/sessions.go).
+config login
+	option username 'admin'
+	option password '$p$admin'
+	list read 'lrap-login'
+	list write 'lrap-login'

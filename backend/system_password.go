@@ -4,74 +4,72 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os/exec"
+	"strings"
 )
 
-// adminUser is the single administrative account on this device. The change
-// password endpoint always targets it and never trusts a client-supplied name.
-const adminUser = "root"
-
-type ChangePasswordReq struct {
-	Username    string `json:"username"` // accepted for backward compat, but ignored (see adminUser)
-	// OldPassword string `json:"old_password"` // 已删除：不需要旧密码(接口已由 withAuth 保护,有效会话即授权)
-	NewPassword string `json:"new_password"`
+// changePasswordHandler changes the signed-in account's own password: admin's
+// for a customer, root's only for someone signed in as root. It asks for no
+// current password and sets no rules on the new one beyond not being empty:
+// the account and the device are the customer's. The same password signs in
+// to SSH, so this changes both; every session of the account ends, and the
+// page signs in again.
+//
+// The agent's rpcd session belongs to no account and is refused.
+type changePasswordReq struct {
+	New string `json:"new_password"`
 }
 
 func changePasswordHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
 	if r.Method != http.MethodPost {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-
-	// 1. 简单的权限校验：确保请求头里带了 Token
-	// 虽然我们不验证旧密码，但至少要保证用户是登录状态
-	auth := r.Header.Get("Authorization")
-	if len(auth) < 7 { // "Bearer "
-		http.Error(w, `{"error":"Unauthorized"}`, http.StatusUnauthorized)
+	user := sessionUser(r)
+	if user == "" {
+		http.Error(w, `{"error":"sign in with a device account to change its password"}`, http.StatusForbidden)
 		return
 	}
-
-	var req ChangePasswordReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req changePasswordReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
 		http.Error(w, `{"error":"bad json"}`, http.StatusBadRequest)
 		return
 	}
-
-	if req.NewPassword == "" {
-		http.Error(w, `{"error":"missing fields"}`, http.StatusBadRequest)
+	// passwd reads one line per answer, so a line break would end it early.
+	if req.New == "" || strings.ContainsAny(req.New, "\r\n") {
+		http.Error(w, `{"error":"enter a new password"}`, http.StatusBadRequest)
 		return
 	}
+	if err := setPassword(user, req.New); err != nil {
+		log.Printf("password change for %q failed: %v", user, err)
+		http.Error(w, `{"error":"the device refused the new password"}`, http.StatusInternalServerError)
+		return
+	}
+	endSessionsOf(user, "")
+	log.Printf("password changed user=%q from=%s", user, remoteHost(r))
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
+}
 
-	// 2. 直接调用系统命令修改密码 (Root 权限下无需旧密码)
-	// 目标账号写死为 adminUser，忽略请求体里的 username，避免越权改任意账号。
-	cmd := exec.Command("passwd", adminUser)
+// setPassword runs passwd as root, which asks for the new password twice and
+// never for the old one.
+var setPassword = func(user, password string) error {
+	if !accountName.MatchString(user) {
+		return fmt.Errorf("not an account name: %q", user)
+	}
+	cmd := exec.Command("passwd", user)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"system pipe failed: %v"}`, err), 500)
-		return
+		return err
 	}
-
 	if err := cmd.Start(); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"passwd cmd failed: %v"}`, err), 500)
-		return
+		return err
 	}
-
-	// 3. 写入新密码 (两次确认)
 	go func() {
 		defer stdin.Close()
-		// Root 修改密码时，系统只要求输入两次新密码
-		io.WriteString(stdin, req.NewPassword+"\n")
-		io.WriteString(stdin, req.NewPassword+"\n")
+		_, _ = io.WriteString(stdin, password+"\n"+password+"\n")
 	}()
-
-	if err := cmd.Wait(); err != nil {
-		// 如果报错，可能是密码太弱被系统拒绝，或者进程权限不足
-		http.Error(w, fmt.Sprintf(`{"error":"failed to set password (too weak?): %v"}`, err), 500)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"ok", "message":"Password changed successfully"}`))
+	return cmd.Wait()
 }

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -387,14 +388,52 @@ var easyMeshRequestPeerLeave = func(ip string) error {
 // that an Agent already out of contact still cannot be told, so the count of
 // failures is returned for the caller to report rather than swallowed.
 func notifyPeersToLeave() (notified int, unreachable int) {
-	return notifyPeersToLeaveVia(easyMeshManagementNodesByALID(), easyMeshLocalALID())
+	distances := make(map[string]int)
+	chassisMACs := map[string]bool{}
+	if topology, err := easyMeshLocalTopologySnapshot(); err == nil {
+		chassisMACs = easyMeshChassisMACsFromTopology(topology)
+		for _, node := range easyMeshRemoteNodesFromTopology(topology, easyMeshDHCPLeasesByMAC()) {
+			if hops, err := strconv.Atoi(strings.TrimSpace(node.Distance)); err == nil {
+				distances[node.ALID] = hops
+			}
+		}
+	}
+	return notifyPeersToLeaveVia(easyMeshManagementNodesByALID(chassisMACs), distances, easyMeshLocalALID())
 }
 
-func notifyPeersToLeaveVia(nodes map[string]easyMeshManagementNode, localALID string) (notified int, unreachable int) {
+// easyMeshPeerLeaveOrder puts the Agents furthest from the Root first.
+//
+// A chain has to be told from the far end inwards. Telling the Agent nearest the
+// Root first takes away the path every Agent behind it would have received its
+// own instruction over, and those are left in a Mesh with no Root -- the exact
+// lock-out this notification exists to prevent. Agents whose hop count the
+// topology does not give go last, after the ones that can be ordered: they are
+// most likely the near ones, and guessing wrong there costs less.
+func easyMeshPeerLeaveOrder(nodes map[string]easyMeshManagementNode, distanceByALID map[string]int, localALID string) []string {
+	order := make([]string, 0, len(nodes))
 	for alID, node := range nodes {
 		if node.IP == "" || alID == localALID {
 			continue
 		}
+		order = append(order, alID)
+	}
+	sort.Slice(order, func(i, j int) bool {
+		hopsI, knownI := distanceByALID[order[i]]
+		hopsJ, knownJ := distanceByALID[order[j]]
+		if knownI != knownJ {
+			return knownI
+		}
+		if hopsI != hopsJ {
+			return hopsI > hopsJ
+		}
+		return order[i] < order[j]
+	})
+	return order
+}
+
+func notifyPeersToLeaveVia(nodes map[string]easyMeshManagementNode, distanceByALID map[string]int, localALID string) (notified int, unreachable int) {
+	for _, alID := range easyMeshPeerLeaveOrder(nodes, distanceByALID, localALID) {
+		node := nodes[alID]
 		if err := easyMeshRequestPeerLeave(node.IP); err != nil {
 			log.Printf("EasyMesh: could not tell Agent %s (%s) to leave: %v", alID, node.IP, err)
 			unreachable++

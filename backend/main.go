@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -84,9 +85,17 @@ func withAccessLog(next http.Handler) http.Handler {
 
 // ---------- CORS 中间件（补充 DELETE） ----------
 
+// withCORS lets the portal's own pages call the API. The pages come from
+// uhttpd on this device (port 80 or 443) and the API answers on 9080, so a
+// browser sees two origins; only one on the same host as the API is allowed,
+// not every website. CORS_ORIGIN names one origin instead, such as a Vite dev
+// server; "*" and empty both mean "this device's own pages".
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", envOr("CORS_ORIGIN", "*"))
+		w.Header().Add("Vary", "Origin")
+		if origin := allowedOrigin(r, envOr("CORS_ORIGIN", "*")); origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
@@ -95,6 +104,32 @@ func withCORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// allowedOrigin is the origin to allow for this request, or "" for none.
+func allowedOrigin(r *http.Request, configured string) string {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return ""
+	}
+	if configured != "" && configured != "*" {
+		if origin == configured {
+			return origin
+		}
+		return ""
+	}
+	u, err := url.Parse(origin)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return ""
+	}
+	host := r.Host
+	if h, _, err := net.SplitHostPort(r.Host); err == nil {
+		host = h
+	}
+	if strings.EqualFold(strings.Trim(u.Hostname(), "[]"), strings.Trim(host, "[]")) {
+		return origin
+	}
+	return ""
 }
 
 // ---------- ubus 登录本机 ----------
@@ -206,47 +241,6 @@ func ubusCallJSONAt(ip, sid, object, method string, params map[string]any) (map[
 
 // ---------- 会话 & 健康检查 ----------
 
-func createSessionHandler(w http.ResponseWriter, r *http.Request) {
-	type inT struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	type outT struct {
-		Token   string `json:"token"`
-		Timeout int    `json:"timeout,omitempty"`
-		Expires int    `json:"expires,omitempty"`
-	}
-	w.Header().Set("Content-Type", "application/json")
-	if r.Method != http.MethodPost {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
-		return
-	}
-
-	var in inT
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Username == "" || in.Password == "" {
-		http.Error(w, `{"error":"bad json"}`, http.StatusBadRequest)
-		return
-	}
-
-	sid, extra, err := ubusLoginLocal(in.Username, in.Password)
-	if err != nil || sid == "" {
-		log.Printf("session failed user=%s from=%s err=%v", in.Username, r.RemoteAddr, err)
-		http.Error(w, `{"error":"invalid credentials"}`, http.StatusUnauthorized)
-		return
-	}
-
-	out := outT{Token: sid}
-	if v, ok := extra["timeout"].(float64); ok {
-		out.Timeout = int(v)
-	}
-	if v, ok := extra["expires"].(float64); ok {
-		out.Expires = int(v)
-	}
-
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(out)
-}
-
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -264,11 +258,22 @@ func main() {
 	log.SetPrefix("[lrapServer] ")
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
+	// Antenna management lives on its own VLAN permanently, not only while a Mesh
+	// is up. The order below matters: the VLAN has to exist before the DHCP pool
+	// can be bound to it, and the pool has to be serving before an Antenna that is
+	// still untagged can be answered and migrated across.
+	ensureAntennaManagementVLAN()
+	// A chassis built before the Antenna ports were pinned down carries a tagged
+	// management leg on every LAN port, including the one reserved for ordinary
+	// customer equipment. Take those back.
+	narrowAntennaManagementVLAN()
 	// Enforce the private Antenna DHCP pool before accepting API requests. This
 	// also migrates older scalar tag options to the UCI list form required by
 	// OpenWrt's dnsmasq generator and asynchronously repairs any Antenna lease
 	// that previously escaped into the ordinary client pool.
 	repairProtectedDHCPAtStartup()
+	migrateUntaggedAntennasAtStartup()
+	alignAntennaClientPlanes()
 	// The client bridge must keep one hardware address for its whole life, or the
 	// DHCP lease it holds — and any static reservation made for it — follows the
 	// bridge membership around instead of the device.
@@ -276,16 +281,26 @@ func main() {
 	if err := ensureLocalMediaTekWiFiServicesCompatibility(); err != nil {
 		log.Printf("MediaTek wifi reload compatibility check failed: %v", err)
 	}
+	// Before anything runs the vendor EasyMesh script, make it able to find the
+	// client bridge again: its own scan matches our Antenna management bridge too,
+	// which leaves it unable to bridge this chassis's radios at all.
+	repairVendorBridgeSelection()
 	resumeEasyMeshAtStartup()
-	// A network reload silently drops the Backhaul station out of the client
-	// bridge while every "is the Backhaul up" signal keeps saying yes, so an Agent
-	// has to keep watching its own bridge.
-	startBackhaulBridgeWatchdog()
+	// A network reload silently drops this chassis's own radios and Backhaul
+	// stations out of the client bridge while every "is it up" signal keeps saying
+	// yes, so the bridge has to be watched for the life of the process.
+	startClientBridgeWatchdog()
+	// An Antenna plugged into a running chassis cannot get onto the management
+	// VLAN by itself, and the startup pass has long since been and gone.
+	startAntennaAdoptionScan()
+	// An Agent takes its Root-issued address with a one-shot udhcpc, so nothing
+	// renews it and the Root drops the lease twelve hours later. Keep it alive.
+	startAgentLeaseRefresh()
 
 	mux := http.NewServeMux()
 
 	// ---- 公开端点（无需登录）----
-	mux.HandleFunc("/api/sessions", createSessionHandler) // 登录
+	mux.HandleFunc("/api/sessions", sessionsHandler) // sign in (POST), who am I (GET), sign out (DELETE)
 	mux.HandleFunc("/healthz", healthHandler)
 	// AP 拉取固件用，靠一次性能力令牌授权，不走会话鉴权
 	mux.HandleFunc("/api/system/firmware/download", firmwareDownloadHandler)
