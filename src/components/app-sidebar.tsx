@@ -63,6 +63,7 @@ const data = {
       icon: Settings2,
       items: [
         { title: 'Interfaces', url: 'interfaces' },
+        { title: 'VLANs', url: 'vlans' },
         { title: 'DHCP and DNS', url: 'DHCPandDNS' },
         { title: 'Static Routes', url: 'staticroutes' },
         { title: 'Firewall', url: 'firewall' }

@@ -262,6 +262,10 @@ func main() {
 	// is up. The order below matters: the VLAN has to exist before the DHCP pool
 	// can be bound to it, and the pool has to be serving before an Antenna that is
 	// still untagged can be answered and migrated across.
+	// A customer VLAN change still waiting for its confirmation when the process
+	// stopped is undone first, so everything below starts from the files as they
+	// were before it.
+	recoverUnconfirmedVLANChange()
 	ensureAntennaManagementVLAN()
 	// A chassis built before the Antenna ports were pinned down carries a tagged
 	// management leg on every LAN port, including the one reserved for ordinary
@@ -342,6 +346,8 @@ func main() {
 	// network/routes
 	mux.HandleFunc("/api/net/static-routes", withAuth(staticRoutesConfigHandler))
 	mux.HandleFunc("/api/net/interfaces", withAuth(interfacesHandler))
+	mux.HandleFunc("/api/net/vlans", withAuth(customerVLANsHandler))
+	mux.HandleFunc("/api/net/vlans/confirm", withAuth(customerVLANConfirmHandler))
 	// firewall
 	mux.HandleFunc("/api/net/firewall", withAuth(firewallHandler))
 	// static leases config

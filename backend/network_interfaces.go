@@ -49,6 +49,8 @@ type InterfaceStats struct {
 	CanRestart   bool                   `json:"can_restart"`
 	CanStop      bool                   `json:"can_stop"`
 	CanDelete    bool                   `json:"can_delete"`
+	// "vlans" for a customer VLAN, which is changed on the VLANs page.
+	ManagedBy string `json:"managed_by,omitempty"`
 }
 
 type APManagementInfo struct {
@@ -307,6 +309,9 @@ func ifaceGetLocalInterfaces(localSid string) ([]InterfaceStats, error) {
 		}
 
 		stat.Editable = ifaceIsEditable(id, proto, device)
+		if m := customerVLANSection.FindStringSubmatch(id); m != nil && m[2] == "" {
+			stat.ManagedBy = "vlans"
+		}
 		stat.CanRestart = stat.Editable
 		stat.CanStop = stat.Editable && id != "lan"
 		stat.CanDelete = stat.Editable && id != "lan"
@@ -799,7 +804,7 @@ func ifaceCreateAlias(localSid string, req InterfaceActionReq) error {
 		return fmt.Errorf("interface name can only contain letters, numbers and underscore")
 	}
 
-	if req.Name == "lan" || req.Name == "wan" || req.Name == "wan6" || req.Name == "loopback" {
+	if req.Name == "lan" || req.Name == "wan" || req.Name == "wan6" || req.Name == "loopback" || strings.HasPrefix(req.Name, "cvlan") {
 		return fmt.Errorf("reserved interface name")
 	}
 
@@ -809,6 +814,10 @@ func ifaceCreateAlias(localSid string, req InterfaceActionReq) error {
 
 	if !ifaceIsValidNetmask(req.Netmask) {
 		return fmt.Errorf("invalid netmask")
+	}
+
+	if err := customerVLANConflict(req.IPAddr, req.Netmask); err != nil {
+		return err
 	}
 
 	ifaceSections, err := ifaceGetNetworkInterfaceSections(localSid)
@@ -867,6 +876,10 @@ func ifaceEdit(localSid string, req InterfaceActionReq) (InterfaceActionResponse
 
 	if !ifaceIsValidNetmask(req.Netmask) {
 		return result, fmt.Errorf("invalid netmask")
+	}
+
+	if err := customerVLANConflict(req.IPAddr, req.Netmask); err != nil {
+		return result, err
 	}
 
 	if req.Interface == "lan" {

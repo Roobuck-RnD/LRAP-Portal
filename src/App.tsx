@@ -24,6 +24,7 @@ import Hostnames from './Pages/Networkpages/hostnames'
 import Interfaces from './Pages/Networkpages/interfaces'
 import IPSecurity from './Pages/Networkpages/ipsecurity'
 import StaticRoutes from './Pages/Networkpages/staticroutes'
+import VLANs from './Pages/Networkpages/vlans'
 import EasyMesh from './Pages/MTKpages/easymesh'
 import WiFiConfiguration from './Pages/MTKpages/wificonfiguration'
 import ProtectedRoute from './Pages/Loginpages/ProtectedRoute'
@@ -69,6 +70,7 @@ function App() {
             <Route path="DHCPandDNS" element={<DHCPandDNS />} />
             <Route path="hostnames" element={<Hostnames />} />
             <Route path="staticroutes" element={<StaticRoutes />} />
+            <Route path="vlans" element={<VLANs />} />
             <Route path="firewall" element={<Firewall />} />
             <Route path="diagnostics" element={<Diagnostics />} />
             <Route path="ipsecurity" element={<IPSecurity />} />

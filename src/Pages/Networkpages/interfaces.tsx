@@ -72,6 +72,7 @@ interface InterfaceStats {
   can_restart: boolean
   can_stop: boolean
   can_delete: boolean
+  managed_by?: string
 }
 
 interface APManagementInfo {
@@ -1005,7 +1006,7 @@ WARNING: Changing the subnet mask, DHCP, gateway, or DNS may temporarily disconn
                             </>
                           ) : (
                             <span className="rounded bg-muted px-2 py-1 text-xs text-muted-foreground">
-                              Read-only
+                              {iface.managed_by === 'vlans' ? 'Managed on the VLANs page' : 'Read-only'}
                             </span>
                           )}
                         </div>
