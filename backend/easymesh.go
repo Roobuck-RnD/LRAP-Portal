@@ -506,6 +506,9 @@ func getEasyMeshStatus() EasyMeshStatus {
 			status.BackhaulConnected = easyMeshBackhaulConnected(raw) && associated
 		}
 	}
+	// The Backhaul passphrase is what keeps clients off the main module's Radios
+	// while a Mesh is up; nobody reading the portal needs it, WPS carries it.
+	status.Config.BackhaulPassphrase = ""
 	return status
 }
 

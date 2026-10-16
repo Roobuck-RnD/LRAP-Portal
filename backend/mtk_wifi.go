@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -329,6 +330,9 @@ func getMtkWifiLogic() (MtkWifiInfo, error) {
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
+	// What each reachable Antenna broadcasts, by IP: the client WiFi, wherever
+	// the main module's own Radios are doing something else.
+	antennaCredentials := map[string]mtkClientCredential{}
 
 	for _, ip := range apIPs {
 		ip := ip
@@ -384,6 +388,9 @@ func getMtkWifiLogic() (MtkWifiInfo, error) {
 			}
 
 			mu.Lock()
+			if err24 == nil && err5 == nil {
+				antennaCredentials[ip] = mtkClientCredential{dat24.SSID, dat24.Pass, dat5.SSID, dat5.Pass}
+			}
 			info.Modules = append(info.Modules, MtkWifiModuleRadio{
 				ModuleID:      moduleID,
 				Name:          name,
@@ -414,7 +421,78 @@ func getMtkWifiLogic() (MtkWifiInfo, error) {
 
 	sortMtkModules(info.Modules)
 
+	if mtkMainCarriesMesh(info.SSID24, info.SSID5) {
+		c := mtkClientWiFiDuringMesh(antennaCredentials, portByIP)
+		info.SSID24, info.Pass24, info.SSID5, info.Pass5 = c.SSID24, c.Pass24, c.SSID5, c.Pass5
+	}
+
 	return info, nil
+}
+
+type mtkClientCredential struct {
+	SSID24, Pass24, SSID5, Pass5 string
+}
+
+// mtkMainCarriesMesh says whether the main module's Radios hold the Mesh
+// Backhaul identity rather than the client WiFi. During a Mesh they broadcast
+// a per-chassis "Roobuck-BH-" name with a generated passphrase (on an Agent,
+// the Root's), which only Mesh devices are meant to know: showing it on this
+// page as "the WiFi" would both mislead and hand anyone signed in the key to
+// the main module's Radios. The prefix test also covers the stretch between
+// Prepare and Enable, and the factory "Multi-AP-" name the turnkey stack can
+// leave behind.
+func mtkMainCarriesMesh(ssid24, ssid5 string) bool {
+	return easyMeshOwnsWiFi() || mtkMeshName(ssid24) || mtkMeshName(ssid5)
+}
+
+// mtkClientWiFiDuringMesh is the client WiFi while the main module carries the
+// Mesh: what the Antennas broadcast, taken from the one on the lowest port so
+// the answer does not change between reads; failing that, the main module's
+// own profile as it was before the Mesh (the pre-Mesh copy); failing that,
+// nothing -- never the Backhaul identity.
+func mtkClientWiFiDuringMesh(antennas map[string]mtkClientCredential, portByIP map[string]int) mtkClientCredential {
+	ips := make([]string, 0, len(antennas))
+	for ip, c := range antennas {
+		if strings.TrimSpace(c.SSID24) != "" || strings.TrimSpace(c.SSID5) != "" {
+			ips = append(ips, ip)
+		}
+	}
+	sort.Slice(ips, func(i, j int) bool {
+		pi, pj := portByIP[ips[i]], portByIP[ips[j]]
+		if pi != pj {
+			if pi == 0 || pj == 0 {
+				return pj == 0
+			}
+			return pi < pj
+		}
+		return ips[i] < ips[j]
+	})
+	if len(ips) > 0 {
+		return antennas[ips[0]]
+	}
+	two, err24 := mtkReadPreMeshProfile("wifi-2g.dat")
+	five, err5 := mtkReadPreMeshProfile("wifi-5g.dat")
+	if err24 != nil || err5 != nil {
+		return mtkClientCredential{}
+	}
+	d24 := parseMtkDatContent(two, mtkBand24G)
+	d5 := parseMtkDatContent(five, mtkBand5G)
+	c := mtkClientCredential{d24.SSID, d24.Pass, d5.SSID, d5.Pass}
+	if mtkMeshName(c.SSID24) || mtkMeshName(c.SSID5) {
+		return mtkClientCredential{}
+	}
+	return c
+}
+
+// mtkMeshName is a name the Mesh, not a person, gave a Radio.
+func mtkMeshName(ssid string) bool {
+	l := strings.ToLower(strings.TrimSpace(ssid))
+	return strings.HasPrefix(l, "roobuck-bh-") || strings.HasPrefix(l, "multi-ap-")
+}
+
+var mtkReadPreMeshProfile = func(name string) (string, error) {
+	raw, err := os.ReadFile(filepath.Join(easyMeshBackupPath, name))
+	return string(raw), err
 }
 
 // ---------- 保存配置 ----------
