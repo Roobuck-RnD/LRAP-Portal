@@ -702,7 +702,8 @@ export default function WiFiConfiguration(): JSX.Element {
         <div className="flex items-start gap-3 rounded-lg border border-primary/30 bg-primary/10 p-4 text-sm">
           <RadioTower className="mt-0.5 size-4 shrink-0 text-primary" />
           <p className="text-muted-foreground">
-            EasyMesh is active. SSIDs, channels and Radio state are owned by the Root Controller and cannot be saved from this page.
+            EasyMesh is active, so nothing on this page can be saved until the Mesh is left. The router&apos;s own Radios carry
+            the Mesh backhaul; the WiFi name and password shown are the ones the antenna modules broadcast to clients.
           </p>
         </div>
       ) : null}

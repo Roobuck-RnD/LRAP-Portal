@@ -300,6 +300,10 @@ func main() {
 	// An Agent takes its Root-issued address with a one-shot udhcpc, so nothing
 	// renews it and the Root drops the lease twelve hours later. Keep it alive.
 	startAgentLeaseRefresh()
+	// A chassis fresh from the factory, or from a factory reset, gets one WiFi
+	// name on every module (wifi_defaults.go). In the background: it waits for
+	// the antenna modules to come up first.
+	go applyFactoryWiFiDefaults()
 
 	mux := http.NewServeMux()
 
