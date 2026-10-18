@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// ---------- 通用类型 ----------
+// ---------- common types ----------
 
 type ubusReq struct {
 	Jsonrpc string        `json:"jsonrpc"`
@@ -30,7 +30,7 @@ type ubusResp struct {
 	Error  any           `json:"error"`
 }
 
-// ---------- 基础工具 ----------
+// ---------- basic helpers ----------
 
 func envOr(k, def string) string {
 	if v := os.Getenv(k); v != "" {
@@ -51,7 +51,7 @@ func newHTTPClient() *http.Client {
 	return &http.Client{Timeout: 10 * time.Second, Transport: tr}
 }
 
-// ---------- 访问日志中间件 ----------
+// ---------- access log middleware ----------
 
 type statusWriter struct {
 	http.ResponseWriter
@@ -83,7 +83,7 @@ func withAccessLog(next http.Handler) http.Handler {
 	})
 }
 
-// ---------- CORS 中间件（补充 DELETE） ----------
+// ---------- CORS middleware (with DELETE) ----------
 
 // withCORS lets the portal's own pages call the API. The pages come from
 // uhttpd on this device (port 80 or 443) and the API answers on 9080, so a
@@ -132,7 +132,7 @@ func allowedOrigin(r *http.Request, configured string) string {
 	return ""
 }
 
-// ---------- ubus 登录本机 ----------
+// ---------- ubus login on this device ----------
 
 func ubusLoginLocal(user, pass string) (sid string, extra map[string]any, err error) {
 	ubusURL := envOr("UBUS_URL", "http://127.0.0.1/ubus")
@@ -156,7 +156,7 @@ func ubusLoginLocal(user, pass string) (sid string, extra map[string]any, err er
 	if len(out.Result) < 1 {
 		return "", nil, fmt.Errorf("ubus bad result body=%s", string(raw))
 	}
-	// 成功应为 [0, {...}]；但也做容错
+	// Success should be [0, {...}], but be lenient
 	if code, _ := out.Result[0].(float64); int(code) != 0 {
 		return "", nil, fmt.Errorf("ubus code=%d body=%s", int(code), string(raw))
 	}
@@ -171,23 +171,23 @@ func ubusLoginLocal(user, pass string) (sid string, extra map[string]any, err er
 	return sid, m, nil
 }
 
-// ---------- 通用：ubus 调用（本机/远程）+ 统一解析 ----------
+// ---------- common: ubus calls (local/remote) + one parser ----------
 
-// 修复版：既能解析标准的 [0, {...}]，也接受成功但无数据的 [0]
+// Fixed version: parses the standard [0, {...}] and also accepts a successful [0] with no data
 func parseUbusResp(r io.Reader) (map[string]any, error) {
 	raw, _ := io.ReadAll(r)
 	var out ubusResp
 	_ = json.Unmarshal(raw, &out)
 
-	// 情况 A：仅有 result:[0] → 成功但无数据
+	// Case A: only result:[0] -> success with no data
 	if len(out.Result) == 1 {
 		if code, _ := out.Result[0].(float64); int(code) == 0 {
 			return map[string]any{}, nil
 		}
-		// 非 0 继续走下面逻辑报错
+		// Non-zero falls through to the error below
 	}
 
-	// 情况 B：标准返回 result:[0, {...}]
+	// Case B: the standard result:[0, {...}]
 	if len(out.Result) >= 2 {
 		if code, _ := out.Result[0].(float64); int(code) != 0 {
 			return nil, fmt.Errorf("ubus code=%d body=%s", int(code), string(raw))
@@ -199,11 +199,11 @@ func parseUbusResp(r io.Reader) (map[string]any, error) {
 		return m, nil
 	}
 
-	// 其它：视为格式异常
+	// Anything else: treated as malformed
 	return nil, fmt.Errorf("ubus bad result body=%s", string(raw))
 }
 
-// 本机（使用 UBUS_URL）
+// Local (uses UBUS_URL)
 func ubusCallJSONLocal(sid, object, method string, params map[string]any) (map[string]any, error) {
 	if params == nil {
 		params = map[string]any{}
@@ -221,7 +221,7 @@ func ubusCallJSONLocal(sid, object, method string, params map[string]any) (map[s
 	return parseUbusResp(resp.Body)
 }
 
-// 远程（http://<ip>/ubus）
+// Remote (http://<ip>/ubus)
 func ubusCallJSONAt(ip, sid, object, method string, params map[string]any) (map[string]any, error) {
 	if params == nil {
 		params = map[string]any{}
@@ -239,7 +239,7 @@ func ubusCallJSONAt(ip, sid, object, method string, params map[string]any) (map[
 	return parseUbusResp(resp.Body)
 }
 
-// ---------- 会话 & 健康检查 ----------
+// ---------- sessions & health check ----------
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -251,9 +251,9 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ---------- 入口 ----------
-// 说明：以下 handler（memory/network/leases/static-lease/static-map/clients）
-// 来自你项目里的其他 .go 文件，这里只做路由注册。
+// ---------- entry point ----------
+// Note: the handlers below (memory/network/leases/static-lease/static-map/clients)
+// live in the other .go files of this project; this only registers the routes.
 func main() {
 	log.SetPrefix("[lrapServer] ")
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
@@ -307,20 +307,20 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// ---- 公开端点（无需登录）----
+	// ---- public endpoints (no sign-in) ----
 	mux.HandleFunc("/api/sessions", sessionsHandler) // sign in (POST), who am I (GET), sign out (DELETE)
 	mux.HandleFunc("/healthz", healthHandler)
-	// AP 拉取固件用，靠一次性能力令牌授权，不走会话鉴权
+	// For APs fetching firmware: authorised by a one-time capability token, not by a session
 	mux.HandleFunc("/api/system/firmware/download", firmwareDownloadHandler)
 
-	// ---- 受保护端点：统一用 withAuth 校验 ubus 会话 ----
-	// overview_* handlers（存在于其他文件）
+	// ---- protected endpoints: withAuth checks the ubus session for all of them ----
+	// overview_* handlers (in other files)
 	mux.HandleFunc("/api/status/overview/system", withAuth(systemOverviewHandler))
 	mux.HandleFunc("/api/status/overview/memory", withAuth(memoryOverviewHandler))
 	mux.HandleFunc("/api/status/overview/network", withAuth(networkOverviewHandler))
 	mux.HandleFunc("/api/status/connected-clients", withAuth(connectedClientsHandler))
 
-	// DHCP & 静态租约（存在于其他文件）
+	// DHCP & static leases (in other files)
 	mux.HandleFunc("/api/lan/leases", withAuth(lanLeasesHandler))
 	mux.HandleFunc("/api/lan/leases/reset", withAuth(resetDhcpLeasesHandler))
 	mux.HandleFunc("/api/lan/static-lease", withAuth(setStaticLeaseHandler))
@@ -335,7 +335,7 @@ func main() {
 	// firmware
 	mux.HandleFunc("/api/system/firmware/flash", withAuth(firmwareFlashHandler))
 
-	// 修改密码接口
+	// change password
 	mux.HandleFunc("/api/system/password", withAuth(changePasswordHandler))
 	// wifi ssid/password
 	mux.HandleFunc("/api/mtk/wifi", withAuth(mtkWifiHandler))

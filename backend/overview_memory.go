@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// 复用 overview_system.go / main.go 中已有的工具函数：
+// Reuses helpers already in overview_system.go / main.go:
 // - envOr
 // - ubusLoginLocal
 // - ubusCallJSONLocal
@@ -45,9 +45,9 @@ func getMemoryViaUbus(r *http.Request) (MemoryInfo, error) {
 	q := r.URL.Query()
 	ip := strings.TrimSpace(q.Get("ip"))
 
-	// -------- 本机 ----------
+	// -------- this device ----------
 	if ip == "" {
-		// 1) 获取 sid：优先从前端 Bearer；否则用后端账号登录本机 ubus
+		// 1) Get a sid: the frontend's Bearer first; otherwise sign in to the local ubus with the backend's account
 		auth := r.Header.Get("Authorization")
 		sid := ""
 		if len(auth) > 7 && (strings.HasPrefix(auth, "Bearer ") || strings.HasPrefix(auth, "bearer ")) {
@@ -57,7 +57,7 @@ func getMemoryViaUbus(r *http.Request) (MemoryInfo, error) {
 			return MemoryInfo{}, fmt.Errorf("unauthorized: missing session token")
 		}
 
-		// 2) 调用本机 ubus: system.info
+		// 2) Call the local ubus: system.info
 		info, err := ubusCallJSONLocal(sid, "system", "info", nil)
 		if err != nil {
 			return MemoryInfo{}, err
@@ -65,8 +65,8 @@ func getMemoryViaUbus(r *http.Request) (MemoryInfo, error) {
 		return mapToMemoryInfo(info)
 	}
 
-	// -------- 远程子模块 ----------
-	// 匿名零 SID（要求子板 rpcd 放开 unauthenticated 的 system.info）
+	// -------- remote sub-module ----------
+	// Anonymous zero SID (needs the sub-board's rpcd to allow system.info unauthenticated)
 
 	info, err := ubusCallJSONAt(ip, AnonSID, "system", "info", nil)
 	if err != nil {
@@ -75,7 +75,7 @@ func getMemoryViaUbus(r *http.Request) (MemoryInfo, error) {
 	return mapToMemoryInfo(info)
 }
 
-// 将 ubus 的 system.info 结果解析为 MemoryInfo
+// Parses ubus system.info into MemoryInfo
 func mapToMemoryInfo(info map[string]any) (MemoryInfo, error) {
 	mem, ok := info["memory"].(map[string]any)
 	if !ok {

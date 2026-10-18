@@ -17,12 +17,12 @@ const (
 	// iwpriv ra0 get_mac_table -> 0x8BEF
 	MTK_IOCTL_GET_MAC_TABLE = 0x8BEF
 
-	// get_mac_table 返回结构：
+	// What get_mac_table returns:
 	// offset 0: uint32 station count
 	// offset 8: first entry
 	// entry size: 40 bytes
 	//
-	// 根据你设备实际 dump：
+	// From an actual dump on the device:
 	// entry + 1  : MAC, 6 bytes
 	// entry + 12 : RSSI chain values, 4 x int8
 	// entry + 16 : connected seconds, uint32 little endian
@@ -203,8 +203,8 @@ func bestRSSI(chains []int) int {
 	best := 0
 
 	for _, r := range chains {
-		// -109 在你的 dump 里像是无效 chain。
-		// 0 也通常不是有效 RSSI。
+		// -109 looks like an invalid chain in the dump.
+		// 0 is usually not a valid RSSI either.
 		if r == 0 || r <= -100 {
 			continue
 		}
@@ -258,8 +258,8 @@ func formatRawRate(raw uint32) string {
 		return ""
 	}
 
-	// 目前先返回 raw。
-	// 后面如果确认 MTK rate bitfield，可以继续解码成：
+	// Return the raw value for now.
+	// Once the MTK rate bitfield is confirmed, this can go on to decode:
 	// MCS / NSS / BW / GI / HE/VHT/HT。
 	return fmt.Sprintf("raw 0x%08x", raw)
 }

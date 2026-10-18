@@ -13,9 +13,9 @@ import (
 	"sync"
 )
 
-// 返回给前端的数据结构
-// 保留 port/mac/ip/hostname，兼容你当前前端
-// 新增 type/online，建议前端后续直接用 type 判断主模块/子模块
+// The data structure returned to the frontend
+// Keeps port/mac/ip/hostname for compatibility with the current frontend
+// Adds type/online; the frontend should use type to tell the main module from sub-modules from now on
 type LanClient struct {
 	ModuleID string `json:"module_id"`
 	Port     string `json:"port"`
@@ -24,10 +24,10 @@ type LanClient struct {
 	Hostname string `json:"hostname"`
 
 	Type   string `json:"type,omitempty"`   // "main" / "ap"
-	Online bool   `json:"online,omitempty"` // main/AP 是否在线
+	Online bool   `json:"online,omitempty"` // whether the main module/AP is online
 }
 
-// ------- ubus 辅助 -------
+// ------- ubus helpers -------
 
 func pickLanIPv4(sid string) string {
 	st, err := ubusCallJSONLocal(sid, "network.interface.lan", "status", nil)
@@ -63,7 +63,7 @@ func getBridgeMAC(sid string) string {
 	return ""
 }
 
-// 主模块 hostname：优先读取 UCI，失败后降级 system board
+// Main module hostname: read UCI first, fall back to system board
 func hostnameFromLocal(sid string) string {
 	params := map[string]any{
 		"config":  "system",
@@ -89,8 +89,8 @@ func hostnameFromLocal(sid string) string {
 	return ""
 }
 
-// 子模块 hostname：继续沿用你的 AnonSID 方案
-// 前提：你已经在子模块 ACL 里允许对应 ubus 调用
+// Sub-module hostname: still the AnonSID approach
+// Requires the sub-module's ACL to allow the corresponding ubus calls
 func resolveRemoteHostname(ip string) string {
 
 	params := map[string]any{
@@ -112,10 +112,10 @@ func resolveRemoteHostname(ip string) string {
 	return ""
 }
 
-// ------- 探测与本地表解析 -------
+// ------- probing and parsing local tables -------
 
-// 并发 ping，但等待全部 ping 完成后再继续读 ARP
-// 修复你之前 go ping 后马上读 ARP 的竞态问题
+// Ping concurrently, but wait for every ping to finish before reading ARP
+// Fixes the earlier race of reading ARP right after starting the pings
 func probeStaticIPs(ips []string) {
 	var wg sync.WaitGroup
 
@@ -126,11 +126,11 @@ func probeStaticIPs(ips []string) {
 		go func() {
 			defer wg.Done()
 
-			// -c 1: 发 1 个包
-			// -W 1: 最多等待 1 秒
-			// OpenWrt busybox ping 支持这个写法
+			// -c 1: send 1 packet
+			// -W 1: wait at most 1 second
+			// OpenWrt busybox ping supports this form
 			if err := exec.Command("ping", "-c", "1", "-W", "1", ip).Run(); err != nil {
-				// 离线是正常情况，不需要打 error log
+				// Being offline is normal; no error log needed
 				return
 			}
 		}()
@@ -139,12 +139,12 @@ func probeStaticIPs(ips []string) {
 	wg.Wait()
 }
 
-// 只返回有效 ARP：
+// Only valid ARP entries are returned:
 // flags == 0x2
 // mac != 00:00:00:00:00:00
 // device == the active Antenna management bridge
 //
-// 返回：ip -> mac
+// Returns: ip -> mac
 func parseARPByIP() map[string]string {
 	f, err := os.Open("/proc/net/arp")
 	if err != nil {
@@ -203,8 +203,8 @@ func parseARPByIP() map[string]string {
 	return out
 }
 
-// 读取 bridge fdb，建立 mac -> port 映射
-// 比你之前只匹配 lan1-lan4 更宽松
+// Read the bridge fdb and build a mac -> port map
+// Looser than the earlier match on lan1-lan4 only
 func listLanEdgePortsByMAC() map[string]string {
 	out := make(map[string]string)
 	bridgeName := "br-lan"
@@ -218,7 +218,7 @@ func listLanEdgePortsByMAC() map[string]string {
 		return out
 	}
 
-	// 常见行：
+	// Typical lines:
 	// 52:53:29:c5:88:a4 dev lan1 master br-lan
 	// 52:53:29:c5:88:a4 dev wan master br-lan
 	// 52:53:29:c5:88:a4 dev eth0 master br-lan
@@ -234,7 +234,7 @@ func listLanEdgePortsByMAC() map[string]string {
 
 		lower := strings.ToLower(ln)
 
-		// 跳过本机 bridge 自身、永久项、vlan 项
+		// Skip the bridge's own entries, permanent entries and vlan entries
 		if strings.Contains(lower, " self ") ||
 			strings.Contains(lower, " permanent") ||
 			strings.Contains(lower, " vlan ") {
@@ -249,12 +249,12 @@ func listLanEdgePortsByMAC() map[string]string {
 		mac := strings.ToUpper(m[1])
 		port := strings.TrimSuffix(m[2], ".200")
 
-		// 跳过 br-lan 自己
+		// Skip br-lan itself
 		if port == bridgeName {
 			continue
 		}
 
-		// 同一个 MAC 如果出现多次，优先保留第一个物理端口
+		// If the same MAC appears more than once, keep the first physical port
 		if _, exists := out[mac]; !exists {
 			out[mac] = port
 		}
@@ -273,7 +273,7 @@ func lanClientsHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	// 1) 取 sid
+	// 1) Get the sid
 	auth := r.Header.Get("Authorization")
 	sid := ""
 
@@ -281,12 +281,12 @@ func lanClientsHandler(w http.ResponseWriter, r *http.Request) {
 		sid = auth[7:]
 	}
 
-	// sid 来自请求 Bearer(接口已由 withAuth 保证存在)。
+	// The sid comes from the request Bearer (withAuth guarantees it is there).
 
-	// 2) 主动探测静态 AP IP，并等待 ping 完成
+	// 2) Probe the static AP IPs and wait for the pings to finish
 	registry := discoverManagedAPs(true)
 
-	// 3) 主模块自己
+	// 3) The main module itself
 	main := LanClient{
 		ModuleID: managedMainModuleID,
 		Port:     "br-lan",
@@ -307,9 +307,9 @@ func lanClientsHandler(w http.ResponseWriter, r *http.Request) {
 		main.MAC = "(unknown)"
 	}
 
-	// 4) 读取 ARP 和 FDB
+	// 4) Read ARP and FDB
 
-	// 5) 组装返回
+	// 5) Assemble the response
 	finalOut := make([]LanClient, 0, 1+len(registry))
 	finalOut = append(finalOut, main)
 
@@ -318,7 +318,7 @@ func lanClientsHandler(w http.ResponseWriter, r *http.Request) {
 
 	for _, module := range registry {
 		if !ifacePingOnce(module.IP) {
-			// 按你的要求，离线 AP 不返回
+			// Offline APs are not returned, as requested
 			continue
 		}
 
@@ -327,7 +327,7 @@ func lanClientsHandler(w http.ResponseWriter, r *http.Request) {
 			Port:     module.Port,
 			MAC:      module.MAC,
 			IP:       module.IP,
-			// 显示名按物理口编号(RoobuckAP1..4),稳定不随 IP 变;设备真实 hostname 不改。
+			// Display names are numbered by physical port (RoobuckAP1..4), stable whatever the IP; the device's real hostname is unchanged.
 			Hostname: apDisplayName("RoobuckAP", module.PortIndex),
 			Type:     "ap",
 			Online:   true,
@@ -336,7 +336,7 @@ func lanClientsHandler(w http.ResponseWriter, r *http.Request) {
 		idx := len(finalOut)
 		finalOut = append(finalOut, client)
 
-		// 并发读取真实 hostname,再按物理口编号
+		// Read the real hostnames concurrently, then number them by physical port
 		wg.Add(1)
 		go func(targetIdx, pN int, targetIP string) {
 			defer wg.Done()

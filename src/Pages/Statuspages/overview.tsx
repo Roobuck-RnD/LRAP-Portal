@@ -133,7 +133,7 @@ const OVERVIEW_NETWORK_CACHE_KEY = 'status.overview.network'
 const OVERVIEW_LEASES_CACHE_KEY = 'status.overview.leases'
 const OVERVIEW_STATIC_CACHE_KEY = 'status.overview.static-map'
 
-// 小工具:label 在上、value 在下的一格键值对。value 支持 mono(数据)。
+// Helper: one key/value cell, label above, value below. value supports mono (data).
 function Field({ label, value, mono }: { label: string; value?: string; mono?: boolean }) {
   return (
     <div className="min-w-0">
@@ -153,7 +153,7 @@ function ErrorNote({ children }: { children: ReactNode }) {
   )
 }
 
-// 卡壳:统一深色卡外观。
+// Card shell: one dark card style.
 function Panel({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <div className={`border-border bg-card rounded-lg border p-4 shadow-sm ${className ?? ''}`}>
@@ -173,7 +173,7 @@ function CardHead({ name, ip }: { name?: string; ip?: string }) {
   )
 }
 
-// 单张卡抽成组件,供开发者模式的"每模块堆叠"与默认模式的"主设备三合一行"复用。
+// One card as a component, shared by developer mode's "one stack per module" and the default mode's "main device on one row".
 function SysCard({ v, className }: { v: SysView; className?: string }) {
   const info = v.sys
 
@@ -720,8 +720,8 @@ function Overview(): JSX.Element {
     return !!staticView.statics?.[macUpper]
   }).length
 
-  // 非开发者模式:System / Memory / Network 三段只显示主设备(Router),隐藏各
-  // Antenna 卡。主设备按 IP(其次 name)与 mainModule 匹配。
+  // Outside developer mode: System / Memory / Network show only the main device (Router) and hide every
+  // Antenna card. The main device is matched to mainModule by IP (then by name).
   const isMainView = (v: { name: string; ip?: string }): boolean =>
     (!!mainModule?.ipaddress && v.ip === mainModule.ipaddress) ||
     (!!mainModule?.name && v.name === mainModule.name)
@@ -730,10 +730,10 @@ function Overview(): JSX.Element {
   const visibleMemViews = devMode ? memViews : memViews.filter(isMainView)
   const visibleNetViews = devMode ? netViews : netViews.filter(isMainView)
 
-  // 开发者模式:每模块一卡,走多列网格。
+  // Developer mode: one card per module, in a multi-column grid.
   const cardsGridClass = 'grid grid-cols-1 gap-4 md:grid-cols-3 xl:grid-cols-5'
 
-  // 默认模式:只有主设备,把 System / Memory / Network 三张卡并成一行(见下方)。
+  // Default mode: only the main device, with its System / Memory / Network cards on one row (below).
   const mainSysView = visibleSysViews[0]
   const mainMemView = visibleMemViews[0]
   const mainNetView = visibleNetViews[0]
@@ -828,7 +828,7 @@ function Overview(): JSX.Element {
         </>
       ) : (
         <>
-          {/* ---------- 默认模式:主设备的 System / Memory / Network 三合一行 ---------- */}
+          {/* ---------- default mode: the main device's System / Memory / Network on one row ---------- */}
           <div className="mb-3">
             <h2 className="text-lg font-semibold tracking-tight">Device Overview</h2>
           </div>

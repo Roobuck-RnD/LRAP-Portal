@@ -6,7 +6,7 @@ ip=$(echo "$QUERY_STRING" | sed -n 's/.*ip=\([^&]*\).*/\1/p' | sed 's/%2E/./g')
 moduleType=$(echo "$QUERY_STRING" | sed -n 's/.*moduleType=\([^&]*\).*/\1/p' | sed 's/%20/ /g')
 
 read_json() {
-  # 将 stdin 全部读取到变量中
+  # read all of stdin into a variable
   read -r body
   echo "$body"
 }

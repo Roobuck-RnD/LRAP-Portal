@@ -6,15 +6,15 @@ import (
 	"strings"
 )
 
-// 这两个端点(static-map / static-lease)服务于 Overview 页面(以 MAC 为中心)。
-// 真正的 UCI 增删改查 + dnsmasq reload 逻辑集中在 static_leases_config.go 的共享
+// These two endpoints (static-map / static-lease) serve the Overview page (MAC-centred).
+// The real UCI create/read/update/delete + dnsmasq reload live in the shared
 // service(staticLeaseUpsert / staticLeaseDeleteByMAC / getUciStaticLeasesLocal),
-// 这里只做请求解析与 Overview 期望的响应格式化。静态租约是 AC-only(AP 关了
-// DHCP),故不再支持 ?ip= 远程。鉴权由 main.go 的 withAuth 统一保证。
+// Only request parsing and the response shape Overview expects are done here. Static leases are AC-only (APs have
+// DHCP off), so remote ?ip= is no longer supported. main.go's withAuth guarantees authentication.
 
-// ---------- 静态租约 列表 ----------
+// ---------- static leases: list ----------
 
-// StaticEntry 是 GET /api/lan/static-map 的响应结构(字段名 ip/name,供 Overview 页解析)。
+// StaticEntry is the response of GET /api/lan/static-map (field names ip/name, as the Overview page parses them).
 type StaticEntry struct {
 	Section string `json:"section"`
 	MAC     string `json:"mac"`
@@ -48,7 +48,7 @@ func staticMapHandler(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(out)
 }
 
-// ---------- 设置/取消 静态租约 ----------
+// ---------- static leases: set / unset ----------
 
 type staticLeaseIn struct {
 	Hostname string `json:"hostname"`
@@ -57,7 +57,7 @@ type staticLeaseIn struct {
 }
 
 type staticLeaseOut struct {
-	Updated bool   `json:"updated"` // true=更新，false=新增
+	Updated bool   `json:"updated"` // true = updated, false = added
 	Section string `json:"section"`
 }
 
@@ -119,7 +119,7 @@ func handleUnsetStatic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !deleted {
-		// 本就不存在，当作成功
+		// It did not exist anyway; treat as success
 		_ = json.NewEncoder(w).Encode(map[string]any{"deleted": false})
 		return
 	}

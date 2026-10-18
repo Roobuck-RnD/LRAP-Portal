@@ -5,17 +5,17 @@ import (
 	"strings"
 )
 
-// ap_port.go 按 AP 接入的 AC 物理 LAN 口给它一个稳定身份/编号。物理口由布线决定,
-// 不随 DHCP IP 变化或 reboot 改变,比 IP 稳。映射链:
+// ap_port.go gives each AP a stable identity/number from the AC's physical LAN port it is plugged into. The port is fixed by the cabling,
+// so it does not move with the DHCP address or a reboot, which makes it steadier than an IP. The mapping:
 //   IP --(/proc/net/arp)--> MAC --(bridge fdb)--> lanN
-// 复用 lan_clients.go 的 parseARPByIP() 和 listLanEdgePortsByMAC()。
+// Reuses parseARPByIP() and listLanEdgePortsByMAC() from lan_clients.go.
 
-// apPortIndexByIP 返回 "AP 的 IP -> 物理口号(1-4)"。解析不出的 IP 不在 map 里。
+// apPortIndexByIP returns "AP IP -> physical port number (1-4)". An IP that cannot be resolved is left out of the map.
 func apPortIndexByIP() map[string]int {
 	return managedAPPortIndexByIP(discoverManagedAPs(false))
 }
 
-// lanPortNumber 从 "lanN" 解析出 N(如 "lan3" -> 3);不是 lan 口返回 0。
+// lanPortNumber parses N out of "lanN" (e.g. "lan3" -> 3); anything that is not a lan port returns 0.
 func lanPortNumber(port string) int {
 	p := strings.ToLower(strings.TrimSpace(port))
 	if !strings.HasPrefix(p, "lan") {
@@ -28,9 +28,9 @@ func lanPortNumber(port string) int {
 	return n
 }
 
-// apDisplayName 给 AP 一个按物理口编号的显示名:portIndex>0 时 = "Antenna" + 口号
-// (如 lan1 -> "Antenna1");解析不出口(portIndex<=0)时回退真实 hostname。
-// 只影响前端显示,不改设备真实 hostname。
+// apDisplayName gives an AP a display name numbered by its physical port: with portIndex>0 it is "Antenna" + the port number
+// (e.g. lan1 -> "Antenna1"); when the port cannot be resolved (portIndex<=0) it falls back to the real hostname.
+// It only changes what the frontend shows, never the device's real hostname.
 func apDisplayName(hostname string, portIndex int) string {
 	if portIndex <= 0 {
 		return hostname

@@ -9,7 +9,7 @@ module_type=$(echo "$query" | sed -n 's/.*moduleType=\([^&]*\).*/\1/p' | sed 's/
 user="root"
 pass="admin"
 
-# 本地 ARP
+# local ARP
 get_arp_json_from_file() {
   awk 'NR > 1 && $3 != "0x0" {
     if (count++ > 0) printf(",\n")
@@ -23,7 +23,7 @@ get_local_arp() {
   echo "]"
 }
 
-# 远程 ARP
+# remote ARP
 get_remote_arp() {
   sshpass -p "$pass" ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$user@$ip" 'cat /proc/net/arp' | awk '
   BEGIN { print "[" }
@@ -35,7 +35,7 @@ get_remote_arp() {
   '
 }
 
-# 执行
+# run
 if [ "$module_type" = "Main Module" ]; then
   get_local_arp
 else

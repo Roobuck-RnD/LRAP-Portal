@@ -100,7 +100,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         const arr: LanClient[] = await res.json()
         if (cancelled) return
 
-        // 映射到你的 Module 结构
+        // map onto the Module structure
         const parsed: Module[] = arr.map((item) => {
           const isMain = item.type === 'main' || item.port === 'br-lan'
 

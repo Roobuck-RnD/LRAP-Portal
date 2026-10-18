@@ -2,7 +2,7 @@
 echo "Content-Type: application/json"
 echo ""
 
-exec 2>/dev/null  # 屏蔽错误输出，避免干扰 JSON
+exec 2>/dev/null  # silence errors so they cannot corrupt the JSON
 
 query="$QUERY_STRING"
 username=$(echo "$query" | sed -n 's/.*username=\([^&]*\).*/\1/p')

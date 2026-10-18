@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// ---------- 数据结构 ----------
+// ---------- data structures ----------
 
 type SystemConfigResp struct {
 	Hostname  string `json:"hostname"`
@@ -39,7 +39,7 @@ type TimezoneEntry struct {
 	Value string `json:"value"`
 }
 
-// ---------- 全局时区缓存 ----------
+// ---------- global time zone cache ----------
 
 var (
 	tzCache     []TimezoneEntry
@@ -220,13 +220,13 @@ func setSystemGeneral(r *http.Request, req SystemConfigReq) (SystemConfigSaveRes
 
 	notifySystemConfigChangeLocal(sid)
 
-	// uci commit 不会把 hostname 应用到运行系统,必须让 system init 重载才会写入
-	// 内核运行时 hostname(否则新名字要等重启才生效,UI 读的正是运行时 hostname)。
+	// uci commit does not apply the hostname to the running system; only a system init reload writes the
+	// kernel's runtime hostname (otherwise the new name waits for a reboot, and the UI reads exactly that runtime hostname).
 	applyLocalHostname()
 
 	// 2. APs: sync timezone only, keep AP hostnames unchanged.
-	// 面向用户的 warning 用按口编号的显示名(Antenna<N>),不暴露 AP 的 IP/多模块架构;
-	// 带 IP 的详细错误只写服务端日志。portByIP 在起 goroutine 前算好,循环里只读。
+	// User-facing warnings use the port-numbered display name (Antenna<N>), never the AP's IP or the multi-module architecture;
+	// detailed errors with IPs go only to the server log. portByIP is computed before the goroutines start and only read in the loop.
 	registry := discoverManagedAPs(true)
 	modulesByPort := managedAntennaModulesByPort(registry)
 	activePorts := currentManagedAntennaPortIndexes(registry)
@@ -321,9 +321,9 @@ func notifySystemConfigChangeRemote(ip string, sid string) {
 	})
 }
 
-// applyLocalHostname 把已提交的 hostname 应用到运行中的系统。`/etc/init.d/system
-// reload` 会从 UCI 重新应用 hostname(及相关 /proc/sys 设置);仅 uci commit 不会,
-// 那样新 hostname 要等重启才生效。fire-and-forget:失败只记日志,不影响保存结果。
+// applyLocalHostname applies the committed hostname to the running system. `/etc/init.d/system
+// reload` re-applies the hostname (and related /proc/sys settings) from UCI; uci commit alone does not,
+// and the new hostname would wait for a reboot. Fire-and-forget: a failure is only logged and does not affect the save.
 func applyLocalHostname() {
 	if out, err := exec.Command("/etc/init.d/system", "reload").CombinedOutput(); err != nil {
 		log.Printf("applyLocalHostname: /etc/init.d/system reload failed: %v, output: %s", err, string(out))

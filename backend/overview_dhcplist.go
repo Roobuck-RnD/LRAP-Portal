@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// 复用（项目内已有）：
+// Reuses (already in this project):
 // - envOr
 // - ubusLoginLocal
 // - ubusCallJSONLocal
@@ -31,9 +31,9 @@ type ResetDhcpResponse struct {
 }
 
 // GET /api/lan/leases
-// AC+AP 架构下，DHCP 只在 AC 主模块上运行。
-// 因此这里永远只读取主模块本机 /tmp/dhcp.leases，不再支持 ?ip= 子模块读取。
-// 10.10.18.2 - 10.10.18.5 是固定子模块管理 IP，不返回到 DHCP lease 列表，也不参与前端计数。
+// In the AC+AP architecture DHCP runs only on the AC main module.
+// So this always reads the main module's own /tmp/dhcp.leases; reading a sub-module with ?ip= is no longer supported.
+// 10.10.18.2 - 10.10.18.5 are the fixed sub-module management IPs; they are not returned in the lease list nor counted by the frontend.
 func lanLeasesHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
@@ -52,8 +52,8 @@ func lanLeasesHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /api/lan/leases/reset
-// 清空 AC 本机 DHCP lease 文件并重启 dnsmasq。
-// 注意：这会让客户端重新续租 DHCP，短时间内页面 lease 可能为空。
+// Empties the AC's own DHCP lease file and restarts dnsmasq.
+// Note: clients then renew their leases, so the page may briefly show no leases.
 func resetDhcpLeasesHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
@@ -108,13 +108,13 @@ func getLocalSIDFromRequest(r *http.Request) (string, error) {
 // ---------- Reset DHCP ----------
 
 func resetLocalDhcpLeases() error {
-	// 清空 lease 文件。使用 WriteFile 而不是 Remove，避免 dnsmasq 对文件路径/权限敏感。
+	// Empty the lease file. WriteFile rather than Remove, since dnsmasq is sensitive to the file path and permissions.
 	if err := os.WriteFile("/tmp/dhcp.leases", []byte(""), 0644); err != nil {
 		return fmt.Errorf("clear /tmp/dhcp.leases failed: %w", err)
 	}
 
-	// 重启 dnsmasq，让 DHCP 状态重新开始。
-	// OpenWrt 通常使用 /etc/init.d/dnsmasq restart。
+	// Restart dnsmasq so DHCP starts over.
+	// OpenWrt normally uses /etc/init.d/dnsmasq restart.
 	out, err := exec.Command("/etc/init.d/dnsmasq", "restart").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("dnsmasq restart failed: %w output=%s", err, string(out))
@@ -123,7 +123,7 @@ func resetLocalDhcpLeases() error {
 	return nil
 }
 
-// ---------- 公共读取 + 兜底逻辑 ----------
+// ---------- shared reads + fallback ----------
 
 func readLeasesWith(call func(object, method string, params map[string]any) (map[string]any, error)) ([]LeaseInfo, error) {
 	out, err := call("file", "read", map[string]any{"path": "/tmp/dhcp.leases"})
@@ -155,8 +155,8 @@ func readLeasesWith(call func(object, method string, params map[string]any) (map
 	return parseLeasesText(text), nil
 }
 
-// 解析 ubus 错误里常见的几种形态，提取出数字错误码。
-// 兼容：result":[5] / result:[5] / "code":5 / code=5
+// Parses the usual shapes of a ubus error and extracts the numeric error code.
+// Accepts: result":[5] / result:[5] / "code":5 / code=5
 var reUbusCode = regexp.MustCompile(`(?i)(?:result["']?\s*:\s*\[\s*(\d+)\s*\]|code["']?\s*[:=]\s*(\d+))`)
 
 func ubusErrCode(err error) (int, bool) {
@@ -181,7 +181,7 @@ func ubusErrCode(err error) (int, bool) {
 	return 0, false
 }
 
-// ---------- 文本解析与小工具 ----------
+// ---------- text parsing and small helpers ----------
 
 func parseLeasesText(s string) []LeaseInfo {
 	lines := strings.Split(s, "\n")
@@ -194,8 +194,8 @@ func parseLeasesText(s string) []LeaseInfo {
 			continue
 		}
 
-		// 形如：<expiry> <mac> <ip> <hostname> <clientid|duid>
-		// 例：1762164925 f4:3b:d8:7f:cc:40 10.10.18.248 DESKTOP-KC17O22 01:f4:3b:d8:7f:cc:40
+		// Shape: <expiry> <mac> <ip> <hostname> <clientid|duid>
+		// e.g. 1762164925 f4:3b:d8:7f:cc:40 10.10.18.248 DESKTOP-KC17O22 01:f4:3b:d8:7f:cc:40
 		parts := strings.Fields(ln)
 		if len(parts) < 4 {
 			continue
@@ -204,7 +204,7 @@ func parseLeasesText(s string) []LeaseInfo {
 		expStr, mac, ip, host := parts[0], parts[1], parts[2], parts[3]
 		ip = strings.TrimSpace(ip)
 
-		// 10.10.18.2 - 10.10.18.5 是 AP 子模块管理 IP，隐藏并且不计数。
+		// 10.10.18.2 - 10.10.18.5 are the AP sub-module management IPs: hidden and not counted.
 		if isReservedAPDHCPIP(ip) {
 			continue
 		}

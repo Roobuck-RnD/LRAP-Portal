@@ -1,6 +1,6 @@
-// 设备(模块)的类型定义。多设备切换(module-switcher)特性已移除,原来的
-// useCurrentModuleStore 一并删掉;这里只保留仍被 app-sidebar / flashfirmware 使用的
-// Module 类型。
+// Type definitions for devices (modules). The multi-device switching (module-switcher) feature was removed, and with it the
+// old useCurrentModuleStore; only the Module type, still used by app-sidebar / flashfirmware,
+// remains here.
 
 type ModuleType = 'Main Module' | 'Sub Module' | 'Unknown'
 

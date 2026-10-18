@@ -2,7 +2,7 @@
 echo "Content-Type: application/json"
 echo ""
 
-# 获取 CGI 参数
+# read the CGI parameters
 ip=$(echo "$QUERY_STRING" | sed -n 's/.*ip=\([^&]*\).*/\1/p' | sed 's/%2E/./g')
 moduleType=$(echo "$QUERY_STRING" | sed -n 's/.*moduleType=\([^&]*\).*/\1/p' | sed 's/%20/ /g')
 

@@ -1249,8 +1249,8 @@ uci commit firewall
 
 func ifaceGetAPManagementList() []APManagementInfo {
 	registry := discoverManagedAPs(true)
-	// 按物理口给稳定显示名(Antenna<N>),而不是暴露 AP 真实 hostname。
-	// portByIP 在起 goroutine 前算好,循环里只读。
+	// Stable display names by physical port (Antenna<N>), rather than exposing the AP's real hostname.
+	// portByIP is computed before the goroutines start and only read inside the loop.
 	modulesByPort := managedAntennaModulesByPort(registry)
 	activePorts := currentManagedAntennaPortIndexes(registry)
 	results := make([]APManagementInfo, len(activePorts))
@@ -1287,8 +1287,8 @@ func ifaceGetAPManagementList() []APManagementInfo {
 }
 
 func ifaceGetSingleAPManagement(ip string, portIndex int) APManagementInfo {
-	// portIndex>0 时 apDisplayName 直接返回 Antenna<N>(忽略 hostname 参数);
-	// 解析不出口时才回退到括号里的名字(离线用 "AP "+ip,在线用真实 hostname)。
+	// With portIndex>0 apDisplayName returns Antenna<N> directly (ignoring the hostname argument);
+	// only when the port cannot be resolved does it fall back to the name given ("AP "+ip offline, the real hostname online).
 	info := APManagementInfo{
 		Name:         apDisplayName("AP "+ip, portIndex),
 		AntennaIndex: portIndex,

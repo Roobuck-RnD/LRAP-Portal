@@ -15,13 +15,13 @@ get_static_map() {
   mac=$(uci get dhcp.@host[$index].mac 2>/dev/null)
 
   if [ -n "$mac" ]; then
-    # 逗号处理（JSON 格式）
+    # comma handling (JSON)
     if [ "$first" -eq 0 ]; then
       echo -n ","
     fi
     first=0
 
-    # 输出 "mac": true 的键值对
+    # output a "mac": true pair
     echo -n "\"$mac\": true"
   fi
 done
@@ -36,13 +36,13 @@ if [ "$moduleType" = "Sub Module" ] && [ -n "$ip" ]; then
       mac=$(uci get dhcp.@host[$index].mac 2>/dev/null)
 
       if [ -n "$mac" ]; then
-        # 逗号处理（JSON 格式）
+        # comma handling (JSON)
         if [ "$first" -eq 0 ]; then
           echo -n ","
         fi
         first=0
 
-        # 输出 "mac": true 的键值对
+        # output a "mac": true pair
         echo -n "\"$mac\": true"
       fi
     done

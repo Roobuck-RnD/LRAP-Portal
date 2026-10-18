@@ -11,11 +11,11 @@ import { AppSidebar } from './app-sidebar'
 import { Outlet, useLocation } from 'react-router'
 import { ThemeToggle } from './theme-toggle'
 
-// 面包屑从当前路由(URL)派生,而不是从内存 store 读。之前读的 zustand
-// (currentTab/currentTabGroup)没有持久化,刷新后会重置成默认值(Status /
-// Overview),但 URL(HashRouter)仍指向真实页面,导致面包屑与内容不一致。
-// URL 是刷新后仍在的唯一可靠来源,所以以它为准。key 对应 App.tsx 里的路由 path,
-// label/group 对应 app-sidebar 的显示名。
+// The breadcrumb is derived from the current route (URL), not read from an in-memory store. It used to read the zustand
+// (currentTab/currentTabGroup), which is not persisted and resets to its defaults on a refresh (Status /
+// Overview) while the URL (HashRouter) still points at the real page, so the breadcrumb and the content disagreed.
+// The URL is the only thing that survives a refresh, so it is the authority. Keys are the route paths in App.tsx;
+// label/group are app-sidebar's display names.
 const ROUTE_BREADCRUMB: Record<string, { group: string; label: string }> = {
   '/': { group: 'Status', label: 'Overview' },
   '/routesstatus': { group: 'Status', label: 'RoutesStatus' },
@@ -52,8 +52,8 @@ const DEFAULT_BREADCRUMB = { group: 'Status', label: 'Overview' }
 export default function Layout() {
   const location = useLocation()
 
-  // 先精确匹配,匹配不到再按大小写不敏感兜底(路由 path 有 connectedClients /
-  // DHCPandDNS 这类混合大小写),都没有就回默认。
+  // Exact match first, then a case-insensitive fallback (route paths such as connectedClients /
+  // DHCPandDNS are mixed case); the default when neither matches.
   const meta =
     ROUTE_BREADCRUMB[location.pathname] ||
     Object.entries(ROUTE_BREADCRUMB).find(

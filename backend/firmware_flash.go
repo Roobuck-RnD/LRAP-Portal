@@ -944,15 +944,15 @@ func firmwarePrecheckAPsAndUpdateJob(jobID string, targetIPs []string) ([]firmwa
 	return states, allOK
 }
 
-// firmwareWaitForAPsAndUpdateJob 验证 AP 是否都刷成功。**不再盯每台烧录前的固定 IP**
-// (那样在"4 格池 + AP MAC 随机化"下会因鬼影租约占格而假失败),改为**池级按数量**验证:
-//   - 成功 = rbap 池(.2-.5)里有 expected 台"可达 + 版本匹配 + 确实重启过(boot_id 不在
-//     烧录前那组里)"的 AP。
-//   - 若池已满且有"持续不可达、且未验证"的 leased IP → 判为疑似鬼影,限频清掉其租约,
-//     腾出格子让被锁住的 AP 重新拿 IP。(复用已验证的 firmwareClearLocalDHCPLeasesForIPs。)
-//   - 到 timeout 仍不足 expected → 失败(真变砖也走这条,不会误判成功)。
+// firmwareWaitForAPsAndUpdateJob verifies that every AP flashed successfully. **It no longer watches each AP's fixed pre-flash IP**
+// (with a 4-slot pool and randomised AP MACs, ghost leases holding slots made that fail falsely); it verifies **by count, at pool level**:
+//   - success = the rbap pool (.2-.5) holds `expected` APs that are reachable, on the matching version and really rebooted (boot_id not in
+//     the pre-flash set).
+//   - if the pool is full and a leased IP stays unreachable and unverified, it is taken for a ghost and its lease is cleared (rate-limited),
+//     freeing a slot so a locked-out AP can get an address again. (Reuses the proven firmwareClearLocalDHCPLeasesForIPs.)
+//   - still short of `expected` at the timeout -> failure (a genuinely bricked AP ends here too, never counted as a success).
 //
-// 返回值语义与调用方一致:全 OK 表示成功;含任一 !OK 表示失败(调用方据此中止刷 AC)。
+// The return value means what the caller expects: all OK is success; any !OK is failure (the caller then stops before flashing the AC).
 func firmwareWaitForAPsAndUpdateJob(jobID string, states []firmwareAPUpgradeState, expectedVersion string, timeout time.Duration) []FirmwareFlashResult {
 	expected := len(states)
 	poolIPs := APManagementIPs()
@@ -965,21 +965,21 @@ func firmwareWaitForAPsAndUpdateJob(jobID string, states []firmwareAPUpgradeStat
 	}
 
 	const (
-		ghostUnreachableFor = 30 * time.Second // 持续不可达多久才判疑似鬼影
-		ghostClearCooldown  = 60 * time.Second // 同一 IP 两次清理的最小间隔
+		ghostUnreachableFor = 30 * time.Second // how long an IP must stay unreachable before it is taken for a ghost
+		ghostClearCooldown  = 60 * time.Second // minimum interval between two clears of the same IP
 		pollInterval        = 5 * time.Second
 	)
 
-	unreachableSince := make(map[string]time.Time) // ip -> 首次持续不可达时间
-	lastCleared := make(map[string]time.Time)      // ip -> 上次清鬼影时间
-	verified := make(map[string]string)            // ip -> 已确认的版本
+	unreachableSince := make(map[string]time.Time) // ip -> when it first became continuously unreachable
+	lastCleared := make(map[string]time.Time)      // ip -> when its ghost lease was last cleared
+	verified := make(map[string]string)            // ip -> the version confirmed on it
 
 	firmwareUpdateJob(jobID, "running",
 		fmt.Sprintf("Waiting for antennas to reboot and report the new version. 0/%d verified.", expected),
 		true, false)
 
 	deadline := time.Now().Add(timeout)
-	// 给 AP 一点启动时间再开始判定(与旧逻辑一致)。
+	// Give the APs some time to boot before judging (as the old logic did).
 	time.Sleep(10 * time.Second)
 
 	for time.Now().Before(deadline) {
@@ -997,14 +997,14 @@ func firmwareWaitForAPsAndUpdateJob(jobID string, states []firmwareAPUpgradeStat
 				}
 				continue
 			}
-			delete(unreachableSince, ip) // 可达了,重置持续不可达计时
+			delete(unreachableSince, ip) // reachable again: reset the unreachable timer
 
 			version, verr := firmwareReadRemoteLRAPVersion(ip)
 			if verr != nil || !firmwareVersionMatches(version, expectedVersion) {
 				continue
 			}
-			// 必须"这次真重启过":boot_id 不在烧录前那组里,防止重刷同名版本时
-			// 一台没真重刷的 AP 因版本号相同被误算成功。
+			// It must really have rebooted this time: its boot_id is not in the pre-flash set. Otherwise, when the same version is reflashed,
+			// an AP that was never actually reflashed would be counted a success because its version number matches.
 			bootID := strings.TrimSpace(firmwareReadRemoteTextIgnoreErr(ip, "/proc/sys/kernel/random/boot_id"))
 			if bootID == "" || preBootIDs[bootID] {
 				continue
@@ -1024,7 +1024,7 @@ func firmwareWaitForAPsAndUpdateJob(jobID string, states []firmwareAPUpgradeStat
 			break
 		}
 
-		// 池满 + 有"持续不可达、且未验证"的 leased IP → 疑似鬼影,限频清掉腾格子。
+		// Pool full and a leased IP that stays unreachable and unverified -> probably a ghost; clear it (rate-limited) to free a slot.
 		if len(leased) >= len(poolIPs) {
 			for _, ip := range poolIPs {
 				if _, ok := verified[ip]; ok || !leased[ip] {
@@ -1039,7 +1039,7 @@ func firmwareWaitForAPsAndUpdateJob(jobID string, states []firmwareAPUpgradeStat
 				}
 				lastCleared[ip] = now
 				if _, err := firmwareClearLocalDHCPLeasesForIPs([]string{ip}); err == nil {
-					delete(unreachableSince, ip) // 给它重新拿 IP 的机会
+					delete(unreachableSince, ip) // give it the chance to get an address again
 					firmwareAppendJobResult(jobID, FirmwareFlashResult{
 						IP: ip, Role: "sub", Stage: "verify", Status: "running", OK: true,
 						Detail: fmt.Sprintf("%s was leased but unreachable; cleared a stale (ghost) lease so the antenna can re-acquire an address.", ip),
@@ -1074,7 +1074,7 @@ func firmwareWaitForAPsAndUpdateJob(jobID string, states []firmwareAPUpgradeStat
 	return results
 }
 
-// firmwarePoolLeasedIPs 返回 poolIPs 中当前在 /tmp/dhcp.leases 里有租约的那些 IP。
+// firmwarePoolLeasedIPs returns the IPs among poolIPs that currently hold a lease in /tmp/dhcp.leases.
 func firmwarePoolLeasedIPs(poolIPs []string) map[string]bool {
 	inPool := make(map[string]bool, len(poolIPs))
 	for _, ip := range poolIPs {
@@ -1095,7 +1095,7 @@ func firmwarePoolLeasedIPs(poolIPs []string) map[string]bool {
 	return leased
 }
 
-// firmwareReadRemoteTextIgnoreErr 是 firmwareReadRemoteText 的便捷封装(出错返回空串)。
+// firmwareReadRemoteTextIgnoreErr wraps firmwareReadRemoteText for convenience (an empty string on error).
 func firmwareReadRemoteTextIgnoreErr(ip, path string) string {
 	text, err := firmwareReadRemoteText(ip, path)
 	if err != nil {
@@ -1600,9 +1600,9 @@ func firmwareDownloadHandler(w http.ResponseWriter, r *http.Request) {
 
 func firmwareStartLocalSysupgrade(path string, keepSettings bool) {
 	go func() {
-		// 调用方已把 job 状态置为 ac_rebooting。这里延迟 ~12s 再真正触发重启,
-		// 给前端(每 3s 轮询一次)足够机会读到 ac_rebooting 那一帧并进入倒计时,
-		// 否则 AC 立刻重启会让前端漏帧、进度页卡在某个 AP 的 waiting。
+		// The caller has already set the job state to ac_rebooting. Wait ~12s here before really triggering the reboot,
+		// so the frontend (polling every 3s) has ample chance to read the ac_rebooting frame and start its countdown;
+		// otherwise an immediate AC reboot makes the frontend miss it and the progress page sticks on some AP's waiting.
 		time.Sleep(12 * time.Second)
 
 		args := []string{}
