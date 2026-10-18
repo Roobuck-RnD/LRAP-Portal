@@ -8,10 +8,10 @@ type DevModeAction = {
   setDevMode: (devMode: DevModeState['devMode']) => void
 }
 
-// 开发者模式开关。**内存态,故意不持久化**:整页刷新、重新登录、token 过期都会回到默认
-// 关闭状态(过期/登出时另有显式重置,见 utils/http.ts 的 handleUnauthorized 和
-// nav-user 的登出处理——因为 token 过期只改 hash、不整页刷新,内存不会自动清)。
-// 校验密码 west20st 只写在前端,属于"软隐藏"防手滑,不是真正的安全边界。
+// Developer mode switch. **In memory, deliberately not persisted**: a full reload, a new sign-in or an expired token all return it to the default
+// off state (expiry and sign-out also reset it explicitly, see handleUnauthorized in utils/http.ts and
+// nav-user's sign-out, because an expired token only changes the hash without a full reload, so memory is not cleared by itself).
+// It is offered only to an account signed in as root and needs no password of its own; it is a convenience, not a security boundary.
 const useDevModeStore = create<DevModeState & DevModeAction>(
   (set): DevModeState & DevModeAction => ({
     devMode: false,

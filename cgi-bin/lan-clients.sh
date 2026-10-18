@@ -6,12 +6,12 @@ echo "["
 
 first=true
 
-### ✅ 0. 主动 ping 所有 DHCP IP，触发 FDB 注册
+### ✅ 0. ping every DHCP IP so the FDB learns them
 awk '{print $3}' /tmp/dhcp.leases | while read ip; do
   ping -c 1 -W 1 "$ip" >/dev/null 2>&1 &
 done
 
-### ✅ 1. 添加主模块 LAN 信息
+### ✅ 1. add the main module's LAN information
 lan_if="br-lan"
 # lan_mac=$(bridge fdb show br br-lan | grep "dev br-lan vlan 1 master br-lan permanent" | awk '{print toupper($1)}')
 lan_mac=$(ip link show "$lan_if" | awk '/link\/ether/ {print toupper($2)}')
@@ -20,7 +20,7 @@ lan_hostname=$(uci get system.@system[0].hostname 2>/dev/null)
 [ -z "$lan_hostname" ] && lan_hostname=$(hostname)
 [ -z "$lan_hostname" ] && lan_hostname="(unknown)"
 
-# 输出主模块项
+# output the main module entry
 echo "  {"
 echo "    \"port\": \"$lan_if\","
 echo "    \"mac\": \"$lan_mac\","
@@ -30,7 +30,7 @@ echo "  }"
 
 first=false
 
-### ✅ 2. 遍历 lan1~lan4 的桥接设备，获取子模块信息
+### ✅ 2. walk the bridge devices on lan1~lan4 to find the sub-modules
 bridge fdb show br br-lan | \
 grep -E "dev lan[1-4] " | \
 grep -v vlan | \
@@ -40,16 +40,16 @@ while read line; do
   mac=$(echo "$line" | awk '{print $1}' | tr 'a-z' 'A-Z')
   port=$(echo "$line" | awk '{print $3}')
 
-  # 在 dhcp.leases 中匹配 MAC，提取 IP 和 Hostname
+  # match the MAC in dhcp.leases to get the IP and hostname
   lease_info=$(awk -v mac="$mac" 'toupper($2)==mac {print $3, $4}' /tmp/dhcp.leases)
   ip=$(echo "$lease_info" | awk '{print $1}')
   hostname=$(echo "$lease_info" | awk '{print $2}')
 
-  # 如果 hostname 是 * 或为空，替换为 (unknown)
+  # a hostname of * or empty becomes (unknown)
   [ "$hostname" = "*" ] || [ -z "$hostname" ] && hostname="(unknown)"
   [ -z "$ip" ] && ip="(unknown)"
 
-  # 输出 JSON
+  # output JSON
   echo ","
   echo "  {"
   echo "    \"port\": \"$port\","

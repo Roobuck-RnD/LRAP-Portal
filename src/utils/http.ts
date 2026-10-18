@@ -81,7 +81,7 @@ function handleUnauthorized() {
   sessionStorage.removeItem('role');
   clearPageDataCache();
 
-  // token 过期只改 hash、不整页刷新,内存态不会自动清,所以显式退出开发者模式。
+  // An expired token only changes the hash without a full reload, so memory is not cleared; leave developer mode explicitly.
   useDevModeStore.getState().setDevMode(false);
 
   if (handlingUnauthorized) return;

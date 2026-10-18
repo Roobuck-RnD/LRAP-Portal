@@ -41,7 +41,7 @@ type ConnectedClient struct {
 	Signal        string `json:"signal,omitempty"`
 	ConnectedTime string `json:"connected_time,omitempty"`
 
-	// 内部使用，不返回给前端。
+	// Internal only; not returned to the frontend.
 	ConnectedSeconds int `json:"-"`
 }
 
@@ -51,7 +51,7 @@ type ConnectedClientModule struct {
 	Type     string `json:"type"` // main / ap
 	Port     string `json:"port,omitempty"`
 	IP       string `json:"ip,omitempty"`
-	MAC      string `json:"mac,omitempty"` // 兼容旧前端，等于 br-lan MAC
+	MAC      string `json:"mac,omitempty"` // Kept for older frontends; equals the br-lan MAC
 	BrLanMAC string `json:"br_lan_mac,omitempty"`
 	Ra0MAC   string `json:"ra0_mac,omitempty"`
 	Rax0MAC  string `json:"rax0_mac,omitempty"`
@@ -109,7 +109,7 @@ type ccMtkStaInfo struct {
 	ConnectedSeconds int    `json:"connected_seconds"`
 	ConnectedTime    string `json:"connected_time"`
 
-	// helper 可能仍然输出这些字段，主后端忽略即可。
+	// The helper may still output these fields; the main backend simply ignores them.
 	TXRateRaw string `json:"tx_rate_raw"`
 	TXRate    string `json:"tx_rate"`
 	RXRateRaw string `json:"rx_rate_raw"`
@@ -1075,8 +1075,8 @@ func ccParseSSIDFromDat(content string) string {
 // ---------- Module Info Helpers ----------
 
 func ccGetLocalSID() string {
-	// 本机匿名可读的项(system board、dhcp.leases 文件等)用 AnonSID;需鉴权的
-	// uci 读取匿名会失败、调用方自行回退。旧的 root 空密码登录本就登不上。
+	// Items the AC can read anonymously (system board, the dhcp.leases file, ...) use AnonSID; uci reads that need
+	// authentication fail anonymously and the caller falls back. The old root login with an empty password never worked anyway.
 	return AnonSID
 }
 
@@ -1180,7 +1180,7 @@ func ccLocalDeviceMAC(sid string, dev string) string {
 		return ""
 	}
 
-	// 1. 优先通过 ubus 读取
+	// 1. Prefer ubus
 	if sid != "" {
 		st, err := ubusCallJSONLocal(sid, "network.device", "status", map[string]any{
 			"name": dev,
@@ -1192,7 +1192,7 @@ func ccLocalDeviceMAC(sid string, dev string) string {
 		}
 	}
 
-	// 2. 本机 fallback：直接读 Linux netdev address
+	// 2. Local fallback: read the Linux netdev address directly
 	return ccReadSysfsMAC(dev)
 }
 
@@ -1220,7 +1220,7 @@ func ccRemoteDeviceMAC(ip string, dev string) string {
 		return ""
 	}
 
-	// 1. 优先通过 ubus network.device status 读取
+	// 1. Prefer ubus network.device status
 	st, err := ubusCallJSONAt(ip, AnonSID, "network.device", "status", map[string]any{
 		"name": dev,
 	})
@@ -1230,12 +1230,12 @@ func ccRemoteDeviceMAC(ip string, dev string) string {
 		}
 	}
 
-	// 2. fallback：远程读 /sys/class/net/<dev>/address
+	// 2. Fallback: read /sys/class/net/<dev>/address remotely
 	if mac := ccRemoteReadSysfsMAC(ip, dev); mac != "" {
 		return mac
 	}
 
-	// 3. fallback：远程执行 ifconfig <dev> 并解析 HWaddr
+	// 3. Fallback: run ifconfig <dev> remotely and parse HWaddr
 	if mac := ccRemoteReadIfconfigMAC(ip, dev); mac != "" {
 		return mac
 	}

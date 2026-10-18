@@ -43,7 +43,7 @@ parse_leases() {
   echo "]"
 }
 
-# 子模块
+# sub-module
 if [ "$moduleType" = "Sub Module" ] && [ -n "$ip" ]; then
   sshpass -p "$pass" ssh -o ConnectTimeout=3 -y "$user@$ip" 'sh -s' <<'EOF'
     if [ ! -f /tmp/dhcp.leases ]; then echo "[]"; exit; fi
@@ -77,5 +77,5 @@ EOF
   exit 0
 fi
 
-# 主模块本地处理
+# main module, handled locally
 parse_leases /tmp/dhcp.leases

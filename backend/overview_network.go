@@ -13,7 +13,7 @@ type NetworkInfo struct {
 	Device    string `json:"device"`
 	Gateway   string `json:"gateway"`
 	DNS       string `json:"dns"`
-	Connected string `json:"connected"` // 形如 "1 d, 02 h, 03 min"
+	Connected string `json:"connected"` // e.g. "1 d, 02 h, 03 min"
 	MAC       string `json:"mac"`
 }
 
@@ -37,7 +37,7 @@ func getNetworkViaUbus(r *http.Request) (NetworkInfo, error) {
 	q := r.URL.Query()
 	ip := strings.TrimSpace(q.Get("ip"))
 
-	// ------- 本机 -------
+	// ------- this device -------
 	if ip == "" {
 		auth := r.Header.Get("Authorization")
 		sid := ""
@@ -54,7 +54,7 @@ func getNetworkViaUbus(r *http.Request) (NetworkInfo, error) {
 		)
 	}
 
-	// ------- 远端（子模块） -------
+	// ------- remote (sub-module) -------
 	return readNetworkVia(AnonSID,
 		func(object, method string, params map[string]any) (map[string]any, error) {
 			return ubusCallJSONAt(ip, AnonSID, object, method, params)
@@ -65,20 +65,20 @@ func getNetworkViaUbus(r *http.Request) (NetworkInfo, error) {
 type ubusGetter func(object, method string, params map[string]any) (map[string]any, error)
 
 func readNetworkVia(sid string, get ubusGetter) (NetworkInfo, error) {
-	// 1) 逻辑接口状态：先尝试取 WAN（主模块适用）
+	// 1) Logical interface status: try WAN first (main module)
 	ifStatus, err := get("network.interface", "status", map[string]any{"interface": "wan"})
 	
-	// 🟢 核心修复：如果取 WAN 报错（比如 result:[4] 找不到接口），降级去取 LAN（纯 AP 子模块适用）
+	// 🟢 The fix: if reading WAN fails (e.g. result:[4], no such interface), fall back to LAN (a pure AP sub-module)
 	if err != nil {
 		var errFallback error
 		ifStatus, errFallback = get("network.interface", "status", map[string]any{"interface": "lan"})
 		if errFallback != nil {
-			// 如果连 LAN 都报错，说明底层确实出问题了
+			// If even LAN fails, something underneath really is wrong
 			return NetworkInfo{}, fmt.Errorf("network query failed (wan and lan): %v", errFallback)
 		}
 	}
 
-	// 2) 解析字段
+	// 2) Parse the fields
 	proto, _ := ifStatus["proto"].(string)
 	device, _ := ifStatus["device"].(string)
 
@@ -105,7 +105,7 @@ func readNetworkVia(sid string, get ubusGetter) (NetworkInfo, error) {
 		connected = formatDHCPUptime(int(u))
 	}
 
-	// 3) 设备层拿 MAC（整表拿回，再按 device 索引）
+	// 3) Get the MAC from the device layer (fetch the whole table, then index by device)
 	devStatus, err := get("network.device", "status", nil)
 	if err != nil {
 		return NetworkInfo{}, fmt.Errorf("network.device status failed: %v", err)

@@ -2,7 +2,7 @@
 echo "Content-Type: application/json"
 echo ""
 
-# 从 QUERY_STRING 中解析参数
+# parse the parameters from QUERY_STRING
 query="$QUERY_STRING"
 
 ip=$(echo "$query" | sed -n 's/.*ip=\([^&]*\).*/\1/p')
@@ -12,7 +12,7 @@ module_type=$(echo "$query" | sed -n 's/.*moduleType=\([^&]*\).*/\1/p' | sed 's/
 user="root"
 pass="admin"
 
-# === 本地信息函数 ===
+# === local information ===
 get_local_sysinfo() {
   hostname=$(uci get system.@system[0].hostname 2>/dev/null)
   [ -z "$hostname" ] && hostname=$(hostname)
@@ -41,7 +41,7 @@ get_local_sysinfo() {
   }"
 }
 
-# === 子模块信息函数（远程调用） ===
+# === sub-module information (remote call) ===
 get_remote_sysinfo() {
   sshpass -p "$pass" ssh -o ConnectTimeout=3 -y "$user@$ip" 'sh -s' <<'EOF'
 hostname=$(uci get system.@system[0].hostname 2>/dev/null)
@@ -72,7 +72,7 @@ echo "{
 EOF
 }
 
-# === 判断模块类型并执行 ===
+# === decide the module type and run ===
 if [ "$module_type" = "Main Module" ]; then
   get_local_sysinfo
 else

@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// ---------- 配置常量 ----------
+// ---------- configuration constants ----------
 
 const (
 	Mtk24GPath = "/etc/wireless/mediatek/mt7981.dbdc.b0.dat"
@@ -42,7 +42,7 @@ const (
 	mtkBand5G  mtkBand = "5g"
 )
 
-// ---------- 数据结构 ----------
+// ---------- data structures ----------
 
 type MtkWifiInfo struct {
 	SSID24  string               `json:"ssid_2g"`
@@ -164,8 +164,8 @@ func init() {
 func mtkWifiHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	// CORS 与 OPTIONS 预检由全局 withCORS 中间件统一处理(尊重 CORS_ORIGIN 配置),
-	// 这里不再自设,避免覆盖配置。
+	// CORS and OPTIONS preflight are handled by the global withCORS middleware (which honours CORS_ORIGIN);
+	// they are not set here, so the configuration is not overridden.
 
 	if r.Header.Get("Authorization") == "" {
 		http.Error(w, `{"error":"Unauthorized"}`, http.StatusUnauthorized)
@@ -271,7 +271,7 @@ func mtkWifiHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ---------- 读取配置 ----------
+// ---------- reading the configuration ----------
 
 func getMtkWifiLogic() (MtkWifiInfo, error) {
 	var info MtkWifiInfo
@@ -358,7 +358,7 @@ func getMtkWifiLogic() (MtkWifiInfo, error) {
 			if name == "" {
 				name = "RoobuckAP"
 			}
-			// 显示名改为按物理口编号(RoobuckAP1..4),稳定不随 IP 变
+			// Display names are numbered by physical port (RoobuckAP1..4), stable whatever the IP
 			name = apDisplayName(name, portByIP[ip])
 
 			dat24 := defaultMtkDatConfig(mtkBand24G)
@@ -495,9 +495,9 @@ var mtkReadPreMeshProfile = func(name string) (string, error) {
 	return string(raw), err
 }
 
-// ---------- 保存配置 ----------
+// ---------- saving the configuration ----------
 
-// genericIfErr 把带内网 IP/细节的错误换成面向用户的通用文案(nil 时返回空串)。
+// genericIfErr replaces an error carrying internal IPs or details with a generic user-facing message ("" for nil).
 func genericIfErr(err error, msg string) string {
 	if err == nil {
 		return ""
@@ -505,8 +505,8 @@ func genericIfErr(err error, msg string) string {
 	return msg
 }
 
-// mtkResultTarget 给 Sync-result 面板算显示名:能解析物理口就 Antenna<N>;否则用传入
-// name;再兜底 Router/Antenna。不暴露 AC/AP/RoobuckAP。与其它端点的 apDisplayName 一致。
+// mtkResultTarget names a target for the sync-result panel: Antenna<N> when the physical port resolves; otherwise the given
+// name; failing that Router/Antenna. Never shows AC/AP/RoobuckAP. Consistent with the other endpoints' apDisplayName.
 func mtkResultTarget(name, typ, ip string, portByIP map[string]int) string {
 	if p := portByIP[ip]; p > 0 {
 		return apDisplayName(name, p)
@@ -912,7 +912,7 @@ func setMtkWifiLogicLegacy(req MtkWifiInfo) (MtkWifiSaveResponse, error) {
 
 		err := updateRemoteMtkWifi(mod.IP, req, mod)
 		if err != nil {
-			// 详细错误(含 IP)只进服务端日志;面板显示通用文案。
+			// The detailed error (with its IP) goes only to the server log; the panel shows a generic message.
 			fmt.Printf("[MTK WiFi] update failed for %s (%s): %v\n", target, mod.IP, err)
 		}
 
@@ -1010,10 +1010,10 @@ func buildMtkDatUpdates(ssid string, pass string, channel string, width string, 
 
 // ---------- MTK WiFi Apply ----------
 //
-// LuCI 的 controller 里使用：
+// LuCI's controller uses:
 // mtkwifi.__run_in_child_env(__mtkwifi_reload, devname)
 //
-// __mtkwifi_reload 内部根据 diff 调用：
+// __mtkwifi_reload then calls, depending on the diff:
 // wifi reload <devname>
 //
 // IMPORTANT: Never use `/sbin/wifi restart` in this product. The MTK restart
@@ -1132,14 +1132,14 @@ func mtkRemoteApplyWifiCommand(state mtkRadioState) string {
 `
 }
 
-// ---------- 持久化运行时 WiFi 状态 ----------
+// ---------- persisted runtime WiFi state ----------
 //
-// 这个工厂固件中，LuCI 的 enable/disable 行为是运行时 ifconfig ra0/rax0 up/down。
-// /sbin/wifi reload 会再次把 ra0/rax0 拉起来，且 RadioOn=0 不会阻止它。
-// 所以这里只在 AC/main 模块保存一个总状态文件，并由 AC 后端每 5 秒重新应用：
+// On this factory firmware, LuCI's enable/disable is a runtime ifconfig ra0/rax0 up/down.
+// /sbin/wifi reload brings ra0/rax0 up again, and RadioOn=0 does not stop it.
+// So only the AC/main module keeps one state file, and the AC backend re-applies it every 5 seconds:
 //   /etc/roobuck/wifi_state.json
 //
-// AP 不保存状态文件。AP 只接收 AC 下发的 ifconfig ra0/rax0 up/down 命令。
+// APs keep no state file; they only receive the ifconfig ra0/rax0 up/down commands the AC sends.
 
 const (
 	mtkStateVersion = 2
@@ -1626,7 +1626,7 @@ func shellArg(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
 
-// ---------- dat 解析 / 更新 ----------
+// ---------- .dat parsing / updating ----------
 
 func defaultMtkDatConfig(band mtkBand) mtkDatConfig {
 	cfg := mtkDatConfig{
@@ -1769,7 +1769,7 @@ func updateRemoteMtkDatFile(ip string, path string, updates map[string]string) e
 	return nil
 }
 
-// ---------- 校验与映射 ----------
+// ---------- validation and mapping ----------
 
 func normalizeMtkWifiRequest(req *MtkWifiInfo) {
 	req.SSID24 = strings.TrimSpace(req.SSID24)
@@ -1995,7 +1995,7 @@ func mtkWidthFromDat5G(htBW string, vhtBW string) string {
 	}
 }
 
-// ---------- 远程读取 ----------
+// ---------- remote reads ----------
 
 func ubusFileWriteRemote(ip, path, content string) error {
 	delimiter := "__MTK_WIFI_CONFIG_EOF__"
@@ -2123,11 +2123,11 @@ func ubusFileReadRemote(ip, path string) (string, error) {
 	return "", fmt.Errorf("no data field")
 }
 
-// ---------- 小工具 ----------
+// ---------- small helpers ----------
 
 func hostnameFromLocalOrFallback() string {
-	// system board 在 AC 的匿名 ACL 下可读,足以拿到真实 hostname;uci get 匿名会
-	// 失败(跳过)。旧的 root 空密码登录本就登不上。
+	// system board is readable under the AC's anonymous ACL, which is enough for the real hostname; an anonymous uci get
+	// fails (and is skipped). The old root login with an empty password never worked anyway.
 	params := map[string]any{
 		"config":  "system",
 		"section": "@system[0]",

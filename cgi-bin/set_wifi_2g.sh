@@ -2,7 +2,7 @@
 echo "Content-Type: application/json"
 echo ""
 
-# 解析 QUERY_STRING 参数
+# parse the QUERY_STRING parameters
 query="$QUERY_STRING"
 ip=$(echo "$query" | sed -n 's/.*ip=\([^&]*\).*/\1/p' | sed 's/%2E/./g')
 moduleType=$(echo "$query" | sed -n 's/.*moduleType=\([^&]*\).*/\1/p' | sed 's/%20/ /g')
@@ -11,7 +11,7 @@ password=$(echo "$query" | sed -n 's/.*password=\([^&]*\).*/\1/p')
 
 bat_path="/etc/wireless/mediatek/mt7981.dbdc.b0.dat"
 
-# 修改主模块 Wi-Fi 配置
+# change the main module's Wi-Fi configuration
 modify_wifi_config() {
   local path="$1"
   [ -n "$ssid" ] && sed -i "s/^SSID1=.*/SSID1=$ssid/" "$path"
@@ -20,7 +20,7 @@ modify_wifi_config() {
   echo '{"success": true}'
 }
 
-# 远程修改子模块 Wi-Fi
+# change a sub-module's Wi-Fi remotely
 remote_modify_wifi() {
   sshpass -p "admin" ssh -y -o ConnectTimeout=3 -o StrictHostKeyChecking=no root@"$ip" /bin/sh <<EOF
 ssid='$ssid'
@@ -38,7 +38,7 @@ echo '{"success": true}'
 EOF
 }
 
-# 判断主模块 or 子模块
+# main module or sub-module?
 if [ "$moduleType" = "Sub Module" ] && [ -n "$ip" ]; then
   remote_modify_wifi
 else

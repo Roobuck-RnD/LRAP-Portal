@@ -9,11 +9,11 @@ export async function authenticateWithOpenWrt(username: string, password: string
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
-      // 如果你后面改成 HttpOnly Cookie 模式，就加上：
+      // If this moves to HttpOnly cookies later, add:
       // credentials: 'include',
     });
 
-    if (!res.ok) return null;             // 401 等都直接返回 null
+    if (!res.ok) return null;             // 401 and the like return null directly
 
     // A portal session token (backend/sessions.go), not an rpcd session id.
     const data: { token?: string; role?: string } = await res.json();

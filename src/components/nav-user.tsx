@@ -43,7 +43,7 @@ export function NavUser({
   const name = sessionStorage.getItem('username') || user.name
 
   const handleLogout = () => {
-    // 登出即退出开发者模式,回到默认隐藏状态。
+    // Signing out also leaves developer mode, back to the default hidden state.
     setDevMode(false)
     // End the session on the device too, not only in this tab. The client does
     // not attach the token to /api/sessions (it is the sign-in path), so it is

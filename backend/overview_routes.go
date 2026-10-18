@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// ---------- 数据结构 ----------
+// ---------- data structures ----------
 
 type ArpEntry struct {
 	IP  string `json:"ip"`

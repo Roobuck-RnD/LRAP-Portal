@@ -35,13 +35,13 @@ func getArchitecture() string {
 	return strings.TrimSpace(string(out))
 }
 
-// 统一的系统信息获取
+// One way to read system information
 func getSysInfoViaUbus(r *http.Request) (SysInfo, error) {
 	q := r.URL.Query()
 	ip := strings.TrimSpace(q.Get("ip"))
 
 	if ip == "" {
-		// 本机：优先使用前端给的 Bearer，否则后端本地登录
+		// This device: use the frontend's Bearer if given, otherwise sign in locally from the backend
 		auth := r.Header.Get("Authorization")
 		sid := ""
 		if len(auth) > 7 && (strings.HasPrefix(auth, "Bearer ") || strings.HasPrefix(auth, "bearer ")) {
@@ -69,7 +69,7 @@ func getSysInfoViaUbus(r *http.Request) (SysInfo, error) {
 		return mapToSysInfo(board, info, arch, customVersion), nil
 	}
 
-	// 远程子模块（未认证零SID；需在子模块 rpcd 的 unauth 放开 system.board/info/file.read）
+	// Remote sub-module (unauthenticated zero SID; the sub-module's rpcd unauth ACL must allow system.board/info/file.read)
 
 	board, err := ubusCallJSONAt(ip, AnonSID, "system", "board", nil)
 	if err != nil {
@@ -82,15 +82,15 @@ func getSysInfoViaUbus(r *http.Request) (SysInfo, error) {
 
 	arch := architectureFromBoard(board)
 	if arch == "" {
-		// 主模块和 AP 当前都是 MT7981，所以这个 fallback 可用；
-		// 如果以后硬件不同，优先使用上面的 board 字段。
+		// The main module and the APs are all MT7981 today, so this fallback works;
+		// if the hardware ever differs, prefer the board field above.
 		arch = getArchitecture()
 	}
 
 	customVersion := readRemoteLRAPVersion(ip)
 	sys := mapToSysInfo(board, info, arch, customVersion)
-	// AP 的 System Info 卡显示名也按物理口编号(Antenna1-4),与 Connected Clients / WiFi
-	// 一致;AC(ip=="")走上面的本机分支,保持真实 hostname。端口解析不出时回退真实 hostname。
+	// An AP's System Info card is also named by physical port (Antenna1-4), consistent with Connected Clients / WiFi;
+	// the AC (ip=="") takes the local branch above and keeps its real hostname. If the port cannot be resolved, the real hostname is used.
 	sys.Hostname = apDisplayName(sys.Hostname, apPortIndexByIP()[ip])
 	return sys, nil
 }
