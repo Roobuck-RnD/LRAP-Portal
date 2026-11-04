@@ -1,7 +1,7 @@
 # LRAP-Portal
 [English](README.md) | 中文
 
-路由器自带的门户（路由器自带网页）：用户在路由器本机上打开的页面，以及页面背后的后端 `lrapServer`。两者都随固件出厂。设备网络的本地配置都在这里完成（接口、DHCP、Wi-Fi、EasyMesh、客户 VLAN、天线模块），云端能要求执行的少数几项变更也由它来落实。
+路由器自带的门户（路由器自带网页）：用户在路由器本机上打开的页面，以及页面背后的后端 `lrapServer`。两者都随固件出厂。设备网络的本地配置都在这里完成（接口、DHCP、Wi-Fi、EasyMesh、客户 VLAN、天线模块、禁止上网的设备），云端能要求执行的少数几项变更也由它来落实。
 
 ## 在系统中的位置
 
@@ -79,6 +79,8 @@ go test . -count=1
 ```
 
 `lrapServer` 从环境变量读取设置，这些变量由 `/etc/init.d/lrapServer` 根据 `/etc/config/lrapServer` 填入：`LISTEN_ADDR`（`:9080`）、`UBUS_URL`（`http://127.0.0.1/ubus`）、`CORS_ORIGIN`（`*`），以及 `TLS_CERT_FILE` 和 `TLS_KEY_FILE`（都为空时使用普通 HTTP；两者都设置时提供 HTTPS）。
+
+**禁止上网的设备**（`backend/blocked_clients.go`、`/api/net/blocked-clients`，以及"状态 > 已连接设备"页面上的 Block 和 Allow 按钮）。被禁止的设备仍留在自己所在的网络里：能连 Wi-Fi、能拿到地址、能打开门户、能访问旁边的设备；但主模块不再为它转发任何流量，既出不了 WAN，也进不了客户 VLAN。每台设备对应一条防火墙规则 `lrap_block_<mac>`，它拦住新连接，并且升级时会保留。同一份列表还会写进 `/var/etc/lrap-blocked-clients.fw`，这是一个防火墙 include，它把这些设备放进 `forwarding_rule`，排在 fw3 放行已建立连接的规则之前，所以设备原有的连接也会断开。`/var` 在重启后会被清空，所以程序启动时会重新写这个 include。路由器自己和天线模块的地址、以及发出请求的那台设备自己的地址，都会被拒绝。
 
 本仓库没有 CI workflow（lrap-ops 的 [`docs/CI.zh-CN.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/CI.zh-CN.md)）：提交 pull request 之前请自己跑 lint、构建和后端测试。
 

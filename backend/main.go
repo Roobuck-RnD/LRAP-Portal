@@ -304,6 +304,9 @@ func main() {
 	// name on every module (wifi_defaults.go). In the background: it waits for
 	// the antenna modules to come up first.
 	go applyFactoryWiFiDefaults()
+	// Blocked clients lose their established connections through a firewall
+	// include in /var, which a reboot empties (blocked_clients.go).
+	writeBlockedClientsScriptAtStartup()
 
 	mux := http.NewServeMux()
 
@@ -354,6 +357,7 @@ func main() {
 	mux.HandleFunc("/api/net/vlans/confirm", withAuth(customerVLANConfirmHandler))
 	// firewall
 	mux.HandleFunc("/api/net/firewall", withAuth(firewallHandler))
+	mux.HandleFunc("/api/net/blocked-clients", withAuth(blockedClientsHandler))
 	// static leases config
 	mux.HandleFunc("/api/lan/static-leases-config", withAuth(staticLeaseConfigHandler))
 

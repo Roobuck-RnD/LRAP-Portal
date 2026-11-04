@@ -1,7 +1,7 @@
 # LRAP-Portal
 English | [中文](README.zh-CN.md)
 
-The router's own web portal: the pages a person opens on the router itself, and the backend behind them, `lrapServer`. Both ship in the firmware. It is where a unit's network is configured locally (interfaces, DHCP, Wi-Fi, EasyMesh, customer VLANs, the antenna modules), and it is what carries out the few changes the cloud may ask for.
+The router's own web portal: the pages a person opens on the router itself, and the backend behind them, `lrapServer`. Both ship in the firmware. It is where a unit's network is configured locally (interfaces, DHCP, Wi-Fi, EasyMesh, customer VLANs, the antenna modules, devices blocked from the internet), and it is what carries out the few changes the cloud may ask for.
 
 ## Where it fits
 
@@ -79,6 +79,8 @@ go test . -count=1
 ```
 
 `lrapServer` reads its settings from the environment, which `/etc/init.d/lrapServer` fills from `/etc/config/lrapServer`: `LISTEN_ADDR` (`:9080`), `UBUS_URL` (`http://127.0.0.1/ubus`), `CORS_ORIGIN` (`*`), and `TLS_CERT_FILE` and `TLS_KEY_FILE` (both empty: plain HTTP; with both set it serves HTTPS).
+
+**Blocked clients** (`backend/blocked_clients.go`, `/api/net/blocked-clients`, the Block and Allow buttons on Status > Connected Clients). A blocked device keeps its place on its own network (Wi-Fi, an address, the portal, the devices beside it) but the main module forwards nothing for it: not to the WAN, not to the customer VLANs. Each device is a firewall rule, `lrap_block_<mac>`, which stops new connections and is kept through upgrades; the same list is written to `/var/etc/lrap-blocked-clients.fw`, a firewall include that puts the devices into `forwarding_rule`, ahead of fw3's rule for established connections, so the ones a device already had end too. Startup writes the include again, because `/var` is emptied by a reboot. The router's own and its antennas' addresses, and the address of the device making the request, are refused.
 
 There is no CI workflow for this repository (lrap-ops [`docs/CI.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/CI.md)): run the lint, the build and the backend tests yourself before a pull request.
 

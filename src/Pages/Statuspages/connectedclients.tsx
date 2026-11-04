@@ -1,7 +1,10 @@
 import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import { apiFetch } from '@/utils/http'
 import useDevModeStore from '@/states/devModeState'
+import { Button } from '@/components/ui/button'
+import { confirmDialog } from '@/components/ui/confirm'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { SearchField } from '@/components/data-table'
 import { PageHeader, PageShell, StatCard } from '@/components/page'
@@ -13,6 +16,8 @@ import {
   Router,
   Monitor,
   AlertCircle,
+  Ban,
+  ShieldCheck,
 } from 'lucide-react'
 
 // ---------- Types ----------
@@ -64,8 +69,26 @@ type FlatClient = ConnectedClient & {
   moduleIP?: string
 }
 
+// A device kept off the internet: it stays on its own network but the router
+// forwards nothing for it (backend/blocked_clients.go).
+type BlockedClient = {
+  mac: string
+  label: string
+}
+
 const CLIENTS_ENDPOINT = '/api/status/connected-clients'
+const BLOCKED_ENDPOINT = '/api/net/blocked-clients'
 const CONNECTED_CLIENTS_CACHE_KEY = 'status.connected-clients.v2'
+
+async function errorOf(res: Response): Promise<string> {
+  try {
+    const body = await res.json()
+    if (body?.error) return String(body.error)
+  } catch {
+    /* not json */
+  }
+  return `HTTP ${res.status}`
+}
 
 function normalizeMac(mac?: string): string {
   return (mac || '').toUpperCase()
@@ -155,6 +178,8 @@ function ConnectedClients(): JSX.Element {
   const [, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  const [blocked, setBlocked] = useState<BlockedClient[]>([])
+  const [busyMac, setBusyMac] = useState<string | null>(null)
 
   const modulesSnapshotRef = useRef<string>(
     cachedAtMount ? stableStringifyModules(cachedAtMount.modules) : ''
@@ -241,12 +266,84 @@ function ConnectedClients(): JSX.Element {
     }
   }, [])
 
+  const fetchBlocked = useCallback(async () => {
+    try {
+      const res = await apiFetch(BLOCKED_ENDPOINT, { method: 'GET' })
+      if (!res.ok) return
+      const data = (await res.json()) as { clients?: BlockedClient[] }
+      setBlocked(Array.isArray(data.clients) ? data.clients : [])
+    } catch {
+      /* the client list still shows; the next poll tries again */
+    }
+  }, [])
+
+  const blockClient = useCallback(
+    async (client: ConnectedClient) => {
+      const mac = normalizeMac(client.mac)
+      const name = formatHostname(client)
+      const ok = await confirmDialog({
+        title: `Block ${name === '(unknown)' ? mac : name}?`,
+        description:
+          'It loses the internet at once, including connections it already has. ' +
+          'It stays on the Wi-Fi and can still reach this portal and the devices next to it. ' +
+          'You can allow it again from the Blocked Devices list.',
+        confirmText: 'Block',
+        destructive: true
+      })
+      if (!ok) return
+
+      setBusyMac(mac)
+      try {
+        const res = await apiFetch(BLOCKED_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mac, label: name === '(unknown)' ? '' : name })
+        })
+        if (!res.ok) throw new Error(await errorOf(res))
+        toast.success(`${name === '(unknown)' ? mac : name} is blocked`)
+        await fetchBlocked()
+      } catch (err: unknown) {
+        toast.error('Not blocked', { description: err instanceof Error ? err.message : String(err) })
+      } finally {
+        setBusyMac(null)
+      }
+    },
+    [fetchBlocked]
+  )
+
+  const allowClient = useCallback(
+    async (entry: BlockedClient) => {
+      setBusyMac(entry.mac)
+      try {
+        const res = await apiFetch(`${BLOCKED_ENDPOINT}?mac=${encodeURIComponent(entry.mac)}`, {
+          method: 'DELETE'
+        })
+        if (!res.ok) throw new Error(await errorOf(res))
+        toast.success(`${entry.label || entry.mac} can use the internet again`)
+        await fetchBlocked()
+      } catch (err: unknown) {
+        toast.error('Not allowed', { description: err instanceof Error ? err.message : String(err) })
+      } finally {
+        setBusyMac(null)
+      }
+    },
+    [fetchBlocked]
+  )
+
+  const blockedByMac = useMemo(() => {
+    const out = new Map<string, BlockedClient>()
+    for (const entry of blocked) out.set(normalizeMac(entry.mac), entry)
+    return out
+  }, [blocked])
+
   useEffect(() => {
     void fetchClients(cachedAtMount === undefined ? 'initial' : 'background')
+    void fetchBlocked()
 
     const refreshWhenVisible = () => {
       if (document.visibilityState !== 'visible') return
       void fetchClients('background')
+      void fetchBlocked()
     }
 
     const timer = window.setInterval(refreshWhenVisible, 5000)
@@ -256,7 +353,7 @@ function ConnectedClients(): JSX.Element {
       window.clearInterval(timer)
       document.removeEventListener('visibilitychange', refreshWhenVisible)
     }
-  }, [cachedAtMount, fetchClients])
+  }, [cachedAtMount, fetchClients, fetchBlocked])
 
   const flatClients = useMemo<FlatClient[]>(() => {
     return modules.flatMap((mod) =>
@@ -483,6 +580,7 @@ function ConnectedClients(): JSX.Element {
                     <th className="px-3 py-2 text-left">Band</th>
                     <th className="px-3 py-2 text-left">Signal</th>
                     <th className="px-3 py-2 text-left">Connected Time</th>
+                    <th className="px-3 py-2 text-left">Internet</th>
                   </tr>
                 </thead>
 
@@ -535,6 +633,41 @@ function ConnectedClients(): JSX.Element {
                       <td className="px-3 py-2 text-foreground">
                         {client.connected_time || '—'}
                       </td>
+
+                      <td className="px-3 py-2">
+                        {(() => {
+                          const mac = normalizeMac(client.mac)
+                          const entry = blockedByMac.get(mac)
+                          if (entry) {
+                            return (
+                              <div className="flex items-center gap-2">
+                                <span className="rounded bg-destructive/15 px-2 py-1 text-xs font-medium text-destructive">
+                                  Blocked
+                                </span>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={busyMac !== null}
+                                  onClick={() => void allowClient(entry)}
+                                >
+                                  Allow
+                                </Button>
+                              </div>
+                            )
+                          }
+                          return (
+                            <Button
+                              size="sm"
+                              variant="destructiveOutline"
+                              disabled={busyMac !== null}
+                              onClick={() => void blockClient(client)}
+                            >
+                              <Ban className="h-3.5 w-3.5" />
+                              Block
+                            </Button>
+                          )
+                        })()}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -543,6 +676,59 @@ function ConnectedClients(): JSX.Element {
           )}
         </CardContent>
       </Card>
+
+      {blocked.length > 0 && (
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle>Blocked Devices</CardTitle>
+            <CardDescription>
+              These devices cannot reach the internet or the customer VLANs, whether or not they are
+              connected now. They can still join the Wi-Fi and reach this portal.
+            </CardDescription>
+          </CardHeader>
+
+          <CardContent>
+            <div className="overflow-auto">
+              <Table className="min-w-full text-sm">
+                <thead className="border-b border-border text-xs text-muted-foreground">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Device</th>
+                    <th className="px-3 py-2 text-left">MAC</th>
+                    <th className="px-3 py-2 text-left">Now</th>
+                    <th className="px-3 py-2 text-left" />
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {blocked.map((entry) => {
+                    const online = flatClients.some((c) => normalizeMac(c.mac) === normalizeMac(entry.mac))
+                    return (
+                      <tr key={entry.mac} className="border-b">
+                        <td className="px-3 py-2 font-medium text-foreground">{entry.label || '(unknown)'}</td>
+                        <td className="px-3 py-2">
+                          <span className="font-mono text-xs text-foreground">{normalizeMac(entry.mac)}</span>
+                        </td>
+                        <td className="px-3 py-2 text-muted-foreground">{online ? 'Connected' : 'Not connected'}</td>
+                        <td className="px-3 py-2 text-right">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={busyMac !== null}
+                            onClick={() => void allowClient(entry)}
+                          >
+                            <ShieldCheck className="h-3.5 w-3.5" />
+                            Allow
+                          </Button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </PageShell>
   )
 }
