@@ -1,17 +1,17 @@
 # LRAP-Portal
-[English](README.md) | 中文
+[English](../../README.md) | 中文
 
 路由器自带的门户（路由器自带网页）：用户在路由器本机上打开的页面，以及页面背后的后端 `lrapServer`。两者都随固件出厂。设备网络的本地配置都在这里完成（接口、DHCP、Wi-Fi、EasyMesh、客户 VLAN、天线模块、禁止上网的设备），云端能要求执行的少数几项变更也由它来落实。
 
 ## 在系统中的位置
 
-一台设备在工厂完成生产（lrap-anchor、lrap-keel、lrap-harbor），之后由云平台（lrap-beacon）通过设备上的 Agent（lrap-buoy）管理。Agent 自己没有配置写入路径：重启、安装固件（始终保留设置）和修改两个 Wi-Fi 网络名称，都通过 `http://127.0.0.1:9080` 交给本门户执行，而且 Agent 只在装有门户的设备上声明这几项能力（capability）（它检查 `/etc/config/lrapServer` 是否存在）。客户 VLAN 在这里配置；云端控制台只做展示。一台设备的完整流程见 lrap-ops 的 [`docs/LIFECYCLE.zh-CN.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/LIFECYCLE.zh-CN.md)；固件必须包含的内容（包括本门户）见 lrap-ops 的 [`docs/FIRMWARE.zh-CN.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/FIRMWARE.zh-CN.md)。
+一台设备在工厂完成生产（lrap-anchor、lrap-keel、lrap-harbor），之后由云平台（lrap-beacon）通过设备上的 Agent（lrap-buoy）管理。Agent 自己没有配置写入路径：重启、安装固件（始终保留设置）和修改两个 Wi-Fi 网络名称，都通过 `http://127.0.0.1:9080` 交给本门户执行，而且 Agent 只在装有门户的设备上声明这几项能力（capability）（它检查 `/etc/config/lrapServer` 是否存在）。客户 VLAN 在这里配置；云端控制台只做展示。一台设备的完整流程见 lrap-ops 的 [`docs/zh-CN/LIFECYCLE.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/zh-CN/LIFECYCLE.md)；固件必须包含的内容（包括本门户）见 lrap-ops 的 [`docs/zh-CN/FIRMWARE.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/zh-CN/FIRMWARE.md)。
 
 在路由器上：
 
 - 页面是 `/www` 下的静态文件，由路由器的 uhttpd 提供（80 或 443 端口）。
 - `lrapServer` 是一个 procd 服务（`/etc/init.d/lrapServer`），监听 `:9080`。它响应页面发来的 `/api/...` 请求，通过路由器的 ubus（`http://127.0.0.1/ubus`）完成操作。页面总是调用“打开它的那台主机”的 9080 端口（`src/utils/http.ts`），因此在 mesh 组网中，每台 AC 的门户都只和自己的后端通信。
-- 账号：`admin` 在门户中拥有全部权限（恢复出厂后密码回到 `admin`）；root 使用每台设备各自的密码，由 Harbor 保管。见 lrap-ops 的 [`docs/OPENWRT-HARDWARE.zh-CN.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/OPENWRT-HARDWARE.zh-CN.md)。
+- 账号：`admin` 在门户中拥有全部权限（恢复出厂后密码回到 `admin`）；root 使用每台设备各自的密码，由 Harbor 保管。见 lrap-ops 的 [`docs/zh-CN/OPENWRT-HARDWARE.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/zh-CN/OPENWRT-HARDWARE.md)。
 
 ## 代码结构
 
@@ -82,11 +82,11 @@ go test . -count=1
 
 **禁止上网的设备**（`backend/blocked_clients.go`、`/api/net/blocked-clients`，以及"状态 > 已连接设备"页面上的 Block 和 Allow 按钮）。被禁止的设备仍留在自己所在的网络里：能连 Wi-Fi、能拿到地址、能打开门户、能访问旁边的设备；但主模块不再为它转发任何流量，既出不了 WAN，也进不了客户 VLAN。每台设备对应一条防火墙规则 `lrap_block_<mac>`，它拦住新连接，并且升级时会保留。同一份列表还会写进 `/var/etc/lrap-blocked-clients.fw`，这是一个防火墙 include，它把这些设备放进 `forwarding_rule`，排在 fw3 放行已建立连接的规则之前，所以设备原有的连接也会断开。`/var` 在重启后会被清空，所以程序启动时会重新写这个 include。路由器自己和天线模块的地址、以及发出请求的那台设备自己的地址，都会被拒绝。
 
-本仓库没有 CI workflow（lrap-ops 的 [`docs/CI.zh-CN.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/CI.zh-CN.md)）：提交 pull request 之前请自己跑 lint、构建和后端测试。
+本仓库没有 CI workflow（lrap-ops 的 [`docs/zh-CN/CI.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/zh-CN/CI.md)）：提交 pull request 之前请自己跑 lint、构建和后端测试。
 
 ## 如何进入固件
 
-门户没有版本 tag：固件取的是当前 `main` 分支，交给固件工程师的文件要附上各自的 SHA-256。每个文件放在哪里（lrap-ops 的 [`docs/FIRMWARE.zh-CN.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/FIRMWARE.zh-CN.md) 中的“主模块”）：
+门户没有版本 tag：固件取的是当前 `main` 分支，交给固件工程师的文件要附上各自的 SHA-256。每个文件放在哪里（lrap-ops 的 [`docs/zh-CN/FIRMWARE.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/zh-CN/FIRMWARE.md) 中的“主模块”）：
 
 | 本仓库中的来源 | 在固件中的位置 | 权限 |
 |---|---|---|
@@ -97,7 +97,7 @@ go test . -count=1
 | `backend/etc/config/lrapServer`、`rpcd`、`uhttpd` | `/etc/config/` | 644 |
 | `backend/usr/share/rpcd/acl.d/*.json`（4 个文件） | `/usr/share/rpcd/acl.d/` | 644 |
 
-之后，固件版本只通过云平台的发布存储桶、由客户自己发起的分批升级（rollout）到达客户手中（lrap-ops 的 `Publish-Firmware.ps1`；[`docs/CLOUD.zh-CN.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/CLOUD.zh-CN.md) 中的“固件版本（S3）”）。
+之后，固件版本只通过云平台的发布存储桶、由客户自己发起的分批升级（rollout）到达客户手中（lrap-ops 的 `Publish-Firmware.ps1`；[`docs/zh-CN/CLOUD.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/zh-CN/CLOUD.md) 中的“固件版本（S3）”）。
 
 ## Vite 模板说明
 

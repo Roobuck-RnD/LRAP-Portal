@@ -1,17 +1,17 @@
 # LRAP-Portal
-English | [中文](README.zh-CN.md)
+English | [中文](docs/zh-CN/README.md)
 
 The router's own web portal: the pages a person opens on the router itself, and the backend behind them, `lrapServer`. Both ship in the firmware. It is where a unit's network is configured locally (interfaces, DHCP, Wi-Fi, EasyMesh, customer VLANs, the antenna modules, devices blocked from the internet), and it is what carries out the few changes the cloud may ask for.
 
 ## Where it fits
 
-A unit is made in the factory (lrap-anchor, lrap-keel, lrap-harbor) and then managed from the cloud platform (lrap-beacon) through its agent (lrap-buoy). The agent has no configuration write path of its own: rebooting, installing firmware (always keeping settings) and changing the two Wi-Fi network names are handed to this portal, on `http://127.0.0.1:9080`, and the agent claims those capabilities only where the portal is installed (it looks for `/etc/config/lrapServer`). Customer VLANs are configured here; the cloud console only shows them. The whole path of a unit is in lrap-ops [`docs/LIFECYCLE.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/LIFECYCLE.md); what the firmware must carry, this portal included, is in lrap-ops [`docs/FIRMWARE.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/FIRMWARE.md).
+A unit is made in the factory (lrap-anchor, lrap-keel, lrap-harbor) and then managed from the cloud platform (lrap-beacon) through its agent (lrap-buoy). The agent has no configuration write path of its own: rebooting, installing firmware (always keeping settings) and changing the two Wi-Fi network names are handed to this portal, on `http://127.0.0.1:9080`, and the agent claims those capabilities only where the portal is installed (it looks for `/etc/config/lrapServer`). Customer VLANs are configured here; the cloud console only shows them. The whole path of a unit is in lrap-ops [`docs/en/LIFECYCLE.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/en/LIFECYCLE.md); what the firmware must carry, this portal included, is in lrap-ops [`docs/en/FIRMWARE.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/en/FIRMWARE.md).
 
 On the router:
 
 - The pages are static files in `/www`, served by the router's uhttpd (port 80 or 443).
 - `lrapServer` is a procd service (`/etc/init.d/lrapServer`) listening on `:9080`. It answers the pages' `/api/...` calls and works through the router's ubus (`http://127.0.0.1/ubus`). The pages call port 9080 of whichever host they were opened from (`src/utils/http.ts`), so in a mesh each AC's portal talks to its own backend.
-- Accounts: `admin` may do everything in the portal (its password goes back to `admin` on a factory reset); root has the unit's own password, held by Harbor. See lrap-ops [`docs/OPENWRT-HARDWARE.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/OPENWRT-HARDWARE.md).
+- Accounts: `admin` may do everything in the portal (its password goes back to `admin` on a factory reset); root has the unit's own password, held by Harbor. See lrap-ops [`docs/en/OPENWRT-HARDWARE.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/en/OPENWRT-HARDWARE.md).
 
 ## Code layout
 
@@ -82,11 +82,11 @@ go test . -count=1
 
 **Blocked clients** (`backend/blocked_clients.go`, `/api/net/blocked-clients`, the Block and Allow buttons on Status > Connected Clients). A blocked device keeps its place on its own network (Wi-Fi, an address, the portal, the devices beside it) but the main module forwards nothing for it: not to the WAN, not to the customer VLANs. Each device is a firewall rule, `lrap_block_<mac>`, which stops new connections and is kept through upgrades; the same list is written to `/var/etc/lrap-blocked-clients.fw`, a firewall include that puts the devices into `forwarding_rule`, ahead of fw3's rule for established connections, so the ones a device already had end too. Startup writes the include again, because `/var` is emptied by a reboot. The router's own and its antennas' addresses, and the address of the device making the request, are refused.
 
-There is no CI workflow for this repository (lrap-ops [`docs/CI.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/CI.md)): run the lint, the build and the backend tests yourself before a pull request.
+There is no CI workflow for this repository (lrap-ops [`docs/en/CI.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/en/CI.md)): run the lint, the build and the backend tests yourself before a pull request.
 
 ## How it reaches the firmware
 
-The portal has no version tags: the firmware takes it from the current `main` branch, and the firmware engineer is given the files with their SHA-256. Where each file goes (lrap-ops [`docs/FIRMWARE.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/FIRMWARE.md), "Main module"):
+The portal has no version tags: the firmware takes it from the current `main` branch, and the firmware engineer is given the files with their SHA-256. Where each file goes (lrap-ops [`docs/en/FIRMWARE.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/en/FIRMWARE.md), "Main module"):
 
 | From this repository | In the firmware | Permissions |
 |---|---|---|
@@ -97,7 +97,7 @@ The portal has no version tags: the firmware takes it from the current `main` br
 | `backend/etc/config/lrapServer`, `rpcd`, `uhttpd` | `/etc/config/` | 644 |
 | `backend/usr/share/rpcd/acl.d/*.json` (4 files) | `/usr/share/rpcd/acl.d/` | 644 |
 
-Firmware releases then reach customers only through the platform's release bucket and the rollouts customers start (lrap-ops `Publish-Firmware.ps1`; [`docs/CLOUD.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/CLOUD.md), "Firmware releases (S3)").
+Firmware releases then reach customers only through the platform's release bucket and the rollouts customers start (lrap-ops `Publish-Firmware.ps1`; [`docs/en/CLOUD.md`](https://github.com/Roobuck-RnD/lrap-ops/blob/main/docs/en/CLOUD.md), "Firmware releases (S3)").
 
 ## Vite template notes
 
